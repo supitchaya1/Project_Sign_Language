@@ -33,8 +33,11 @@ export default function Navbar() {
             {isMenuOpen ? <X size={24} /> : <Menu size={24} />}
           </button>
 
+          {/* Empty spacer for desktop to balance the layout */}
+          <div className="hidden lg:block w-[200px]"></div>
+
           {/* Desktop Navigation - Centered */}
-          <div className="hidden lg:flex items-center justify-center flex-1">
+          <div className="hidden lg:flex items-center justify-center">
             <div className="flex items-center gap-8">
               {navLinks.map((link) => (
                 <Link
@@ -134,7 +137,7 @@ export default function Navbar() {
                   <Button 
                     variant="outline" 
                     size="sm"
-                    className="border-[#223C55] dark:border-white/50 text-[#263F5D] dark:text-white bg-white hover:bg-gray-100 dark:hover:bg-white/10 rounded-full px-4"
+                    className="border-[#223C55] dark:border-white/50 text-[#263F5D] dark:text-[#0F1F2F] bg-white hover:bg-gray-100 dark:bg-white dark:hover:bg-gray-100 rounded-full px-4"
                   >
                     เข้าสู่ระบบ
                   </Button>
@@ -142,7 +145,7 @@ export default function Navbar() {
                 <Link to="/register">
                   <Button 
                     size="sm"
-                    className="bg-[#0F1F2F] text-[#C9A7E3] hover:bg-[#1a2f44] rounded-full px-4"
+                    className="bg-[#0F1F2F] dark:bg-[#D8C0D0] text-[#C9A7E3] dark:text-[#0F1F2F] hover:bg-[#1a2f44] dark:hover:bg-[#c9b0c1] rounded-full px-4"
                   >
                     สร้างบัญชี
                   </Button>
