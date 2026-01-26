@@ -7,11 +7,17 @@ import { useNavigate } from 'react-router-dom';
 import { useState, useRef } from 'react';
 
 export default function ProfilePage() {
-  const { user, logout, updateProfile } = useAuth();
+  const { user, loading, logout, updateProfile } = useAuth();
   const navigate = useNavigate();
+  const displayName =
+    user?.user_metadata?.name ||
+    user?.user_metadata?.full_name ||
+    user?.email?.split('@')[0] ||
+    '';
   const [isEditing, setIsEditing] = useState(false);
-  const [editName, setEditName] = useState(user?.name || '');
+  const [editName, setEditName] = useState(displayName);
   const [previewAvatar, setPreviewAvatar] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleLogout = () => {
@@ -34,25 +40,37 @@ export default function ProfilePage() {
     }
   };
 
-  const handleSave = () => {
-    if (updateProfile) {
-      updateProfile(editName, previewAvatar || user?.avatar);
+  const handleSave = async () => {
+    setErrorMessage(null);
+    try {
+      await updateProfile(editName, previewAvatar);
+      setIsEditing(false);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'อัปเดตโปรไฟล์ไม่สำเร็จ';
+      setErrorMessage(message);
     }
-    setIsEditing(false);
   };
 
   const handleCancel = () => {
-    setEditName(user?.name || '');
+    setEditName(displayName);
     setPreviewAvatar(null);
     setIsEditing(false);
   };
+
+  if (loading) {
+    return null;
+  }
 
   if (!user) {
     navigate('/login');
     return null;
   }
 
-  const currentAvatar = previewAvatar || user.avatar;
+  const currentAvatar =
+    previewAvatar ||
+    user.user_metadata?.avatar_url ||
+    user.user_metadata?.picture ||
+    null;
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#E8D5F0] to-[#FEFBF4] dark:from-[#1a2f44] dark:to-[#0F1F2F] py-8 md:py-12">
@@ -69,7 +87,7 @@ export default function ProfilePage() {
               onClick={isEditing ? handleAvatarClick : undefined}
             >
               {currentAvatar ? (
-                <img src={currentAvatar} alt={user.name} className="w-full h-full object-cover" />
+                <img src={currentAvatar} alt={displayName} className="w-full h-full object-cover" />
               ) : (
                 <User size={40} className="text-white" />
               )}
@@ -91,6 +109,11 @@ export default function ProfilePage() {
           {/* User Info */}
           {isEditing ? (
             <div className="mb-6">
+              {errorMessage && (
+                <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600 mb-3">
+                  {errorMessage}
+                </div>
+              )}
               <Input
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
@@ -120,7 +143,7 @@ export default function ProfilePage() {
             </div>
           ) : (
             <>
-              <h1 className="text-xl font-bold text-[#263F5D] dark:text-white mb-1 text-center">{user.name}</h1>
+              <h1 className="text-xl font-bold text-[#263F5D] dark:text-white mb-1 text-center">{displayName || 'ผู้ใช้'}</h1>
               <p className="text-gray-500 dark:text-white/60 text-sm mb-6 text-center">{user.email}</p>
             </>
           )}

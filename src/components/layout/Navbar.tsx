@@ -12,6 +12,13 @@ export default function Navbar() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const location = useLocation();
+  const displayName =
+    user?.user_metadata?.name ||
+    user?.user_metadata?.full_name ||
+    user?.email?.split('@')[0] ||
+    'ผู้ใช้';
+  const avatarUrl =
+    user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
 
   const navLinks = [
     { path: '/', label: 'หน้าหลัก' },
@@ -83,17 +90,17 @@ export default function Navbar() {
             {isAuthenticated && (
               <div className="relative">
                 <button
-                  onClick={() => setIsProfileOpen(!isProfileOpen)}
+                    onClick={() => setIsProfileOpen(!isProfileOpen)}
                   className="flex items-center gap-2"
                 >
                   <div className="w-9 h-9 rounded-full bg-[#C9A7E3] flex items-center justify-center overflow-hidden border-2 border-white dark:border-white/30">
-                    {user?.avatar ? (
-                      <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
+                    {avatarUrl ? (
+                      <img src={avatarUrl} alt={displayName} className="w-full h-full object-cover" />
                     ) : (
                       <User size={18} className="text-[#0F1F2F]" />
                     )}
                   </div>
-                  <span className="hidden lg:inline text-[#263F5D] dark:text-white font-medium text-sm">{user?.name}</span>
+                  <span className="hidden lg:inline text-[#263F5D] dark:text-white font-medium text-sm">{displayName}</span>
                 </button>
 
                 <AnimatePresence>
@@ -105,7 +112,7 @@ export default function Navbar() {
                       className="absolute right-0 mt-2 w-48 bg-white dark:bg-[#213B54] rounded-lg shadow-lg border border-[#223C55]/20 dark:border-white/20 overflow-hidden z-50"
                     >
                       <div className="p-3 border-b border-gray-200 dark:border-white/20">
-                        <p className="font-medium text-[#263F5D] dark:text-white text-sm">{user?.name}</p>
+                        <p className="font-medium text-[#263F5D] dark:text-white text-sm">{displayName}</p>
                         <p className="text-xs text-gray-500 dark:text-white/70">{user?.email}</p>
                       </div>
                       <Link

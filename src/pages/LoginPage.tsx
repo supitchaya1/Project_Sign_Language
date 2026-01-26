@@ -9,20 +9,23 @@ import { useAuth } from '@/contexts/AuthContext';
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const { login } = useAuth();
+  const { login, loginWithGoogle } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
+    setErrorMessage(null);
     try {
       await login(email, password);
       navigate('/');
-    } catch (error) {
-      console.error(error);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'เข้าสู่ระบบไม่สำเร็จ';
+      setErrorMessage(message);
     } finally {
       setIsLoading(false);
     }
@@ -41,6 +44,11 @@ export default function LoginPage() {
           </h1>
 
           <form onSubmit={handleSubmit} className="space-y-5">
+            {errorMessage && (
+              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">
+                {errorMessage}
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="email" className="flex items-center gap-2 text-[#263F5D] text-sm">
                 <Mail size={14} />
@@ -108,7 +116,24 @@ export default function LoginPage() {
             </div>
           </div>
 
-          <Button variant="outline" className="w-full border-2 border-[#223C55] text-[#263F5D] bg-white/50 hover:bg-white/70 text-sm" type="button">
+          <Button
+            variant="outline"
+            className="w-full border-2 border-[#223C55] text-[#263F5D] bg-white/50 hover:bg-white/70 text-sm"
+            type="button"
+            onClick={async () => {
+              setIsLoading(true);
+              setErrorMessage(null);
+              try {
+                await loginWithGoogle();
+              } catch (error: unknown) {
+                const message = error instanceof Error ? error.message : 'เข้าสู่ระบบไม่สำเร็จ';
+                setErrorMessage(message);
+              } finally {
+                setIsLoading(false);
+              }
+            }}
+            disabled={isLoading}
+          >
             <svg className="w-4 h-4 mr-2" viewBox="0 0 24 24">
               <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
               <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
