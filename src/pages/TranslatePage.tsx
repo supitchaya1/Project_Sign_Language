@@ -9,12 +9,30 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription, // เพิ่มบรรทัดนี้
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 
-// Define SpeechRecognition types
+declare namespace Intl {
+  interface SegmentData {
+    segment: string;
+    isWordLike?: boolean;
+  }
+
+  interface Segmenter {
+    segment(input: string): Iterable<SegmentData>;
+  }
+
+  interface SegmenterConstructor {
+    new (
+      locales?: string | string[],
+      options?: { granularity?: 'word' | 'sentence' | 'grapheme' }
+    ): Segmenter;
+  }
+
+  const Segmenter: SegmenterConstructor;
+}
+
 interface SpeechRecognitionEvent extends Event {
   results: SpeechRecognitionResultList;
   resultIndex: number;
@@ -63,13 +81,67 @@ export default function TranslatePage() {
   const [isRecording, setIsRecording] = useState(false);
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [text, setText] = useState('');
+  
+  const segmenter =
+    typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
+      ? new Intl.Segmenter('th', { granularity: 'word' })
+      : null;
+
+  const getWordCount = (str: string) => {
+    const s = str.trim();
+    if (!s) return 0;
+
+    if (segmenter) {
+      let count = 0;
+      for (const part of segmenter.segment(s)) {
+        if (part.isWordLike) count++;
+      }
+      return count;
+    }
+
+    // fallback ถ้า browser ไม่มี Segmenter
+    return s.split(/\s+/).filter(Boolean).length;
+  };
+
+  const clampToMaxWords = (input: string, maxWords: number) => {
+    const s = input.trim();
+    if (!s) return '';
+
+    if (segmenter) {
+      let out = '';
+      let count = 0;
+
+      for (const part of segmenter.segment(s)) {
+        const isWord = !!part.isWordLike;
+        if (isWord) {
+          if (count >= maxWords) break;
+          count++;
+        }
+        out += part.segment;
+      }
+      return out.trim();
+    }
+
+    return s.split(/\s+/).slice(0, maxWords).join(' ');
+  };
+  
+  const wordCount = getWordCount(text);
+  const maxWords = 150;
+  
+  const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const newText = e.target.value;
+    const clamped = clampToMaxWords(newText, maxWords);
+
+    if (clamped !== newText) toast.warning(`เกินขีดจำกัด ${maxWords} คำ`);
+    setText(clamped);
+  };
+
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [showNotFoundModal, setShowNotFoundModal] = useState(false);
+  const [showSummarizeErrorModal, setShowSummarizeErrorModal] = useState(false);
   const [isProcessingFile, setIsProcessingFile] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
 
-  // Initialize Speech Recognition
   useEffect(() => {
     const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognitionAPI) {
@@ -92,7 +164,12 @@ export default function TranslatePage() {
         }
 
         if (finalTranscript) {
-          setText(prev => prev + finalTranscript);
+          setText(prev => {
+            const next = prev + finalTranscript;
+            const clamped = clampToMaxWords(next, maxWords);
+            if (clamped !== next) toast.warning(`เกินขีดจำกัด ${maxWords} คำ`);
+            return clamped;
+          });
         }
       };
 
@@ -190,9 +267,15 @@ export default function TranslatePage() {
       }
 
       if (data?.text) {
-        setText(prev => prev + (prev ? ' ' : '') + data.text);
+        setText(prev => {
+          const next = prev + (prev ? ' ' : '') + data.text;
+          const clamped = clampToMaxWords(next, maxWords);
+          if (clamped !== next) toast.warning(`เกินขีดจำกัด ${maxWords} คำ`);
+          return clamped;
+        });
         toast.success('แปลงไฟล์เสียงเป็นข้อความสำเร็จ');
-      } else {
+      } 
+      else {
         toast.warning('ไม่พบข้อความในไฟล์เสียง');
       }
     } catch (error) {
@@ -240,9 +323,8 @@ export default function TranslatePage() {
       });
     } catch (error) {
       console.error('Error summarizing:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      toast.error(`เกิดข้อผิดพลาด: ${errorMessage}`);
-      setShowNotFoundModal(true);
+      toast.error('สร้างสรุปไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+      setShowSummarizeErrorModal(true);
     } finally {
       setIsSubmitting(false);
     }
@@ -367,27 +449,26 @@ export default function TranslatePage() {
             transition={{ delay: 0.3 }}
             className="border-2 border-[#223C55] dark:border-[#213B54] rounded-xl p-5 bg-[#A6BFE3]"
           >
-            <h2 className="font-semibold text-[#263F5D] mb-3 text-sm">
-              ข้อความที่ได้ / พิมพ์ข้อความ
-            </h2>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="font-semibold text-[#263F5D] text-sm">
+                ข้อความที่ได้ / พิมพ์ข้อความ
+              </h2>
+              <span className={`text-xs font-medium ${wordCount >= maxWords ? 'text-red-500' : 'text-[#263F5D]/70'}`}>
+                {wordCount}/{maxWords}
+              </span>
+            </div>
             <Textarea
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={handleTextChange}
               placeholder="ข้อความจะแสดงที่นี่หลังบันทึกเสียง หรือคุณสามารถพิมพ์ข้อความที่ต้องการได้"
               className="min-h-[100px] resize-none bg-white/50 border-2 border-[#223C55] text-[#263F5D] placeholder:text-[#263F5D]/50 text-sm"
             />
-          </motion.div>
-
-          {/* Submit Button */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.4 }}
-          >
+            
+            {/* Submit Button inside the text box */}
             <Button
               onClick={handleSubmit}
               size="lg"
-              className="w-full bg-[#0F1F2F] hover:bg-[#1a2f44] text-[#C9A7E3] font-semibold py-5 rounded-xl text-sm"
+              className="w-full mt-4 bg-[#0F1F2F] hover:bg-[#1a2f44] text-[#C9A7E3] font-semibold py-5 rounded-xl text-sm"
               disabled={isProcessingFile || isSubmitting}
             >
               {isSubmitting ? (
@@ -403,14 +484,11 @@ export default function TranslatePage() {
         </div>
       </div>
 
-      {/* Upload Modal - แก้ไขเพิ่ม DialogDescription */}
+      {/* Upload Modal */}
       <Dialog open={showUploadModal} onOpenChange={setShowUploadModal}>
         <DialogContent className="sm:max-w-md bg-white dark:bg-[#1a2f44]">
           <DialogHeader>
             <DialogTitle className="text-[#263F5D] dark:text-white">อัพโหลดไฟล์</DialogTitle>
-            <DialogDescription className="text-sm text-gray-500 dark:text-gray-400">
-              รองรับไฟล์เสียงนามสกุล .mp3, .wav, .m4a
-            </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col items-center py-8 border-2 border-dashed border-[#223C55] dark:border-white/20 rounded-lg bg-[#A6BFE3]/30">
             <Upload size={40} className="text-[#263F5D]/40 mb-4" />
@@ -433,27 +511,22 @@ export default function TranslatePage() {
         </DialogContent>
       </Dialog>
 
-      {/* Not Found Modal - แก้ไขเพิ่ม DialogTitle และ DialogDescription อย่างถูกต้อง */}
-      <Dialog open={showNotFoundModal} onOpenChange={setShowNotFoundModal}>
+      {/* Summarize Error Modal */}
+      <Dialog open={showSummarizeErrorModal} onOpenChange={setShowSummarizeErrorModal}>
         <DialogContent className="sm:max-w-md text-center bg-white dark:bg-[#1a2f44]">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold text-[#263F5D] dark:text-white text-center mb-2">
-              ขออภัย ไม่พบคำศัพท์นี้
-            </DialogTitle>
-            <DialogDescription className="text-[#263F5D]/60 dark:text-white/60 text-sm text-center">
-              ระบบยังไม่มีข้อมูลภาษามือสำหรับคำที่คุณพูด กรุณาลองพูดใหม่อีกครั้ง
-              หรือใช้คำที่มีความหมายใกล้เคียง
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="py-4 flex flex-col items-center">
-            <div className="text-5xl mb-4">🤟</div>
-            
+          <div className="py-6">
+            <div className="text-5xl mb-4">📝</div>
+            <h2 className="text-lg font-bold text-[#263F5D] dark:text-white mb-2">
+              ขออภัย สร้างสรุปไม่สำเร็จ
+            </h2>
+            <p className="text-[#263F5D]/60 dark:text-white/60 mb-6 text-sm">
+              ระบบไม่สามารถสรุปข้อความได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง
+            </p>
             <Button
-              onClick={() => setShowNotFoundModal(false)}
-              className="bg-[#0F1F2F] hover:bg-[#1a2f44] text-[#C9A7E3] mt-2"
+              onClick={() => setShowSummarizeErrorModal(false)}
+              className="bg-[#0F1F2F] hover:bg-[#1a2f44] text-[#C9A7E3]"
             >
-              พูดอีกครั้ง
+              ลองอีกครั้ง
             </Button>
           </div>
         </DialogContent>
