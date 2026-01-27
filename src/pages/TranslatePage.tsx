@@ -9,6 +9,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription, // เพิ่มบรรทัดนี้
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
@@ -402,11 +403,14 @@ export default function TranslatePage() {
         </div>
       </div>
 
-      {/* Upload Modal */}
+      {/* Upload Modal - แก้ไขเพิ่ม DialogDescription */}
       <Dialog open={showUploadModal} onOpenChange={setShowUploadModal}>
         <DialogContent className="sm:max-w-md bg-white dark:bg-[#1a2f44]">
           <DialogHeader>
             <DialogTitle className="text-[#263F5D] dark:text-white">อัพโหลดไฟล์</DialogTitle>
+            <DialogDescription className="text-sm text-gray-500 dark:text-gray-400">
+              รองรับไฟล์เสียงนามสกุล .mp3, .wav, .m4a
+            </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col items-center py-8 border-2 border-dashed border-[#223C55] dark:border-white/20 rounded-lg bg-[#A6BFE3]/30">
             <Upload size={40} className="text-[#263F5D]/40 mb-4" />
@@ -429,21 +433,25 @@ export default function TranslatePage() {
         </DialogContent>
       </Dialog>
 
-      {/* Not Found Modal */}
+      {/* Not Found Modal - แก้ไขเพิ่ม DialogTitle และ DialogDescription อย่างถูกต้อง */}
       <Dialog open={showNotFoundModal} onOpenChange={setShowNotFoundModal}>
         <DialogContent className="sm:max-w-md text-center bg-white dark:bg-[#1a2f44]">
-          <div className="py-6">
-            <div className="text-5xl mb-4">🤟</div>
-            <h2 className="text-lg font-bold text-[#263F5D] dark:text-white mb-2">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold text-[#263F5D] dark:text-white text-center mb-2">
               ขออภัย ไม่พบคำศัพท์นี้
-            </h2>
-            <p className="text-[#263F5D]/60 dark:text-white/60 mb-6 text-sm">
+            </DialogTitle>
+            <DialogDescription className="text-[#263F5D]/60 dark:text-white/60 text-sm text-center">
               ระบบยังไม่มีข้อมูลภาษามือสำหรับคำที่คุณพูด กรุณาลองพูดใหม่อีกครั้ง
               หรือใช้คำที่มีความหมายใกล้เคียง
-            </p>
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="py-4 flex flex-col items-center">
+            <div className="text-5xl mb-4">🤟</div>
+            
             <Button
               onClick={() => setShowNotFoundModal(false)}
-              className="bg-[#0F1F2F] hover:bg-[#1a2f44] text-[#C9A7E3]"
+              className="bg-[#0F1F2F] hover:bg-[#1a2f44] text-[#C9A7E3] mt-2"
             >
               พูดอีกครั้ง
             </Button>
