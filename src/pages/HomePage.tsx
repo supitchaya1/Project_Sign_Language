@@ -66,10 +66,13 @@ export default function HomePage() {
                 initial={{ opacity: 0 }}
                 whileInView={{ opacity: 1 }}
                 viewport={{ once: true }}
-                className="text-xl md:text-2xl font-bold text-center text-[#263F5D] dark:text-[#263F5D] mb-8"
+                className="text-xl md:text-2xl font-bold text-center text-[#263F5D] dark:text-[#263F5D] mb-4"
               >
                 ใช้งานง่ายใน 3 ขั้นตอน
               </motion.h2>
+              
+              {/* Divider line */}
+              <div className="w-full h-[2px] bg-[#223C55] mb-6"></div>
 
               <div className="grid md:grid-cols-3 gap-6">
                 {steps.map((step, index) => (
