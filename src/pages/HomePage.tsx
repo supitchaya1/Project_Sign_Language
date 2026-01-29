@@ -42,10 +42,16 @@ export default function HomePage() {
             <Link to="/translate">
               <Button
                 size="lg"
-                className="bg-[#0F1F2F] hover:bg-[#1a2f44] text-[#C9A7E3] font-semibold text-lg px-8 py-6 rounded-full shadow-md hover:shadow-lg transition-all group"
+                className="
+                  bg-[#0F1F2F] hover:bg-[#1a2f44] text-[#C9A7E3]
+                  dark:bg-[#C7D9F2] dark:hover:bg-[#b9cde9] dark:text-[#0F1F2F]
+                  font-semibold text-lg px-8 py-6 rounded-full
+                  shadow-md hover:shadow-lg transition-all group
+                "
               >
                 เริ่มใช้งาน
                 <ArrowRight className="ml-2 group-hover:translate-x-1 transition-transform" size={20} />
+
               </Button>
             </Link>
 
