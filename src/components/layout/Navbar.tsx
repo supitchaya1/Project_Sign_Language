@@ -34,7 +34,7 @@ export default function Navbar() {
         <div className="flex items-center justify-between h-14">
           {/* Mobile Menu Button */}
           <button
-            className="lg:hidden p-2 text-[#263F5D] dark:text-white"
+            className="lg:hidden p-2 text-white"
             onClick={() => setIsMenuOpen(!isMenuOpen)}
           >
             {isMenuOpen ? <X size={24} /> : <Menu size={24} />}
@@ -165,69 +165,87 @@ export default function Navbar() {
         {/* Mobile Menu */}
         <AnimatePresence>
           {isMenuOpen && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              className="lg:hidden overflow-hidden"
-            >
-              <div className="py-4 space-y-2">
-                {navLinks.map((link) => (
-                  <Link
-                    key={link.path}
-                    to={link.path}
-                    onClick={() => setIsMenuOpen(false)}
-                    className={`block py-2 px-4 rounded-lg font-medium text-sm ${
-                      isActive(link.path) 
-                        ? 'bg-white text-[#263F5D] shadow-sm dark:bg-white/20 dark:text-white' 
-                        : 'text-[#C9A7E3] hover:bg-gray-100 dark:hover:bg-white/10'
-                    }`}
-                  >
-                    {link.label}
-                  </Link>
-                ))}
-                
-                <div className="pt-4 border-t border-gray-200 dark:border-white/20 space-y-2">
-                  {isAuthenticated ? (
-                    <>
+            <>
+              {/* Backdrop (click to close) */}
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-40 lg:hidden"
+                onClick={() => setIsMenuOpen(false)}
+              />
+
+              {/* Menu Card */}
+              <motion.div
+                initial={{ opacity: 0, y: -8, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -8, scale: 0.98 }}
+                transition={{ type: "spring", stiffness: 260, damping: 22 }}
+                className="fixed z-50 lg:hidden left-4 top-16 w-[260px] rounded-2xl border border-white/20 bg-[#0F1F2F] shadow-xl overflow-hidden"
+                onClick={(e) => e.stopPropagation()} // กันคลิกในกล่องแล้วปิด
+              >
+                <div className="p-4 space-y-2">
+                  {/* Links */}
+                  <div className="space-y-1">
+                    {navLinks.map((link) => (
                       <Link
-                        to="/profile"
+                        key={link.path}
+                        to={link.path}
                         onClick={() => setIsMenuOpen(false)}
-                        className="block py-2 px-4 text-[#263F5D] dark:text-white text-sm"
+                        className={`flex items-center px-3 py-2 rounded-xl font-medium text-sm ${
+                          isActive(link.path)
+                            ? "bg-white/10 text-white"
+                            : "text-[#C9A7E3] hover:bg-white/5"
+                        }`}
                       >
-                        โปรไฟล์
+                        {link.label}
                       </Link>
-                      <button
-                        onClick={() => {
-                          logout();
-                          setIsMenuOpen(false);
-                        }}
-                        className="w-full text-left py-2 px-4 text-red-500 text-sm"
-                      >
-                        ออกจากระบบ
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <Link
-                        to="/login"
-                        onClick={() => setIsMenuOpen(false)}
-                        className="block py-2 px-4 text-center rounded-full border border-[#223C55] dark:border-white/30 text-[#003459] dark:text-white text-sm"
-                      >
-                        เข้าสู่ระบบ
-                      </Link>
-                      <Link
-                        to="/register"
-                        onClick={() => setIsMenuOpen(false)}
-                        className="block py-2 px-4 text-center rounded-full bg-[#0F1F2F] text-[#C9A7E3] font-medium text-sm"
-                      >
-                        สร้างบัญชีผู้ใช้
-                      </Link>
-                    </>
-                  )}
+                    ))}
+                  </div>
+
+                  <div className="pt-3 border-t border-white/10 space-y-2">
+                    {isAuthenticated ? (
+                      <>
+                        <Link
+                          to="/profile"
+                          onClick={() => setIsMenuOpen(false)}
+                          className="block px-3 py-2 rounded-xl text-white text-sm hover:bg-white/5"
+                        >
+                          โปรไฟล์
+                        </Link>
+                        <button
+                          onClick={() => {
+                            logout();
+                            setIsMenuOpen(false);
+                          }}
+                          className="w-full text-left px-3 py-2 rounded-xl text-red-400 text-sm hover:bg-white/5"
+                        >
+                          ออกจากระบบ
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <Link
+                          to="/login"
+                          onClick={() => setIsMenuOpen(false)}
+                          className="flex items-center justify-center gap-2 py-2 rounded-full bg-white text-[#0F1F2F] font-medium text-sm hover:bg-gray-100"
+                        >
+                          เข้าสู่ระบบ
+                        </Link>
+
+                        <Link
+                          to="/register"
+                          onClick={() => setIsMenuOpen(false)}
+                          className="flex items-center justify-center gap-2 py-2 rounded-full border border-white/70 text-white font-medium text-sm hover:bg-white/5"
+                        >
+                          สร้างบัญชีผู้ใช้
+                        </Link>
+                      </>
+                    )}
+                  </div>
                 </div>
-              </div>
-            </motion.div>
+              </motion.div>
+            </>
           )}
         </AnimatePresence>
       </div>
