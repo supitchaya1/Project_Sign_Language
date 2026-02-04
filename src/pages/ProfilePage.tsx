@@ -1,4 +1,4 @@
-import { User, Settings, LogOut, Camera, Edit2, X, Check } from 'lucide-react';
+import { User, LogOut, Camera, Edit2, X, Check } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,11 +9,13 @@ import { useState, useRef } from 'react';
 export default function ProfilePage() {
   const { user, loading, logout, updateProfile } = useAuth();
   const navigate = useNavigate();
+
   const displayName =
     user?.user_metadata?.name ||
     user?.user_metadata?.full_name ||
     user?.email?.split('@')[0] ||
     '';
+
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(displayName);
   const [previewAvatar, setPreviewAvatar] = useState<string | null>(null);
@@ -57,17 +59,28 @@ export default function ProfilePage() {
     setIsEditing(false);
   };
 
-  if (loading) {
-    return null;
-  }
+  if (loading) return null;
 
   if (!user) {
     navigate('/login');
     return null;
   }
 
+  // ✅ เพิ่มส่วนนี้: เช็คว่า login ด้วย provider อะไร
+  const provider = user.app_metadata?.provider; // 'google' | 'email' | ...
+  const googleAvatar =
+    provider === 'google'
+      ? (user.user_metadata?.picture || user.user_metadata?.avatar_url || null)
+      : null;
+
+  // ✅ ลำดับความสำคัญรูป:
+  // 1) รูปที่เลือกใหม่ (preview)
+  // 2) ถ้าเป็น Google → ใช้รูป Google
+  // 3) รูปที่เคยอัปโหลด/บันทึกใน user_metadata
+  // 4) ไม่มีรูป → null (ไปแสดง icon คน)
   const currentAvatar =
     previewAvatar ||
+    googleAvatar ||
     user.user_metadata?.avatar_url ||
     user.user_metadata?.picture ||
     null;
@@ -80,23 +93,31 @@ export default function ProfilePage() {
           animate={{ opacity: 1, y: 0 }}
           className="bg-white dark:bg-[#1a2f44] rounded-xl p-6 border-2 border-[#223C55] dark:border-[#213B54]"
         >
-          {/* Avatar with edit button */}
+          {/* Avatar */}
           <div className="relative w-24 h-24 mx-auto mb-4">
-            <div 
+            <div
               className="w-24 h-24 rounded-full bg-[#213B54] flex items-center justify-center overflow-hidden cursor-pointer group"
               onClick={isEditing ? handleAvatarClick : undefined}
             >
               {currentAvatar ? (
-                <img src={currentAvatar} alt={displayName} className="w-full h-full object-cover" />
+                <img
+                  src={currentAvatar}
+                  alt={displayName}
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
               ) : (
-                <User size={40} className="text-white" />
+                // ✅ ไม่มีรูป = โชว์ icon คน
+                <User size={44} className="text-white" />
               )}
+
               {isEditing && (
                 <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity rounded-full">
                   <Camera size={24} className="text-white" />
                 </div>
               )}
             </div>
+
             <input
               ref={fileInputRef}
               type="file"
@@ -121,6 +142,7 @@ export default function ProfilePage() {
                 placeholder="ชื่อของคุณ"
               />
               <p className="text-gray-500 dark:text-white/60 text-sm text-center">{user.email}</p>
+
               <div className="flex gap-2 mt-4 justify-center">
                 <Button
                   size="sm"
@@ -143,7 +165,9 @@ export default function ProfilePage() {
             </div>
           ) : (
             <>
-              <h1 className="text-xl font-bold text-[#263F5D] dark:text-white mb-1 text-center">{displayName || 'ผู้ใช้'}</h1>
+              <h1 className="text-xl font-bold text-[#263F5D] dark:text-white mb-1 text-center">
+                {displayName || 'ผู้ใช้'}
+              </h1>
               <p className="text-gray-500 dark:text-white/60 text-sm mb-6 text-center">{user.email}</p>
             </>
           )}
@@ -151,8 +175,8 @@ export default function ProfilePage() {
           {/* Actions */}
           <div className="space-y-2">
             {!isEditing && (
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 className="w-full justify-start border-[#223C55] dark:border-white/10 text-[#263F5D] dark:text-white text-sm"
                 onClick={() => setIsEditing(true)}
               >
@@ -160,14 +184,7 @@ export default function ProfilePage() {
                 แก้ไขโปรไฟล์
               </Button>
             )}
-            <Button variant="outline" className="w-full justify-start border-[#223C55] dark:border-white/10 text-[#263F5D] dark:text-white text-sm">
-              <Settings size={16} className="mr-3" />
-              จัดการบัญชี
-            </Button>
-            <Button variant="outline" className="w-full justify-start border-[#223C55] dark:border-white/10 text-[#263F5D] dark:text-white text-sm">
-              <User size={16} className="mr-3" />
-              สลับบัญชี
-            </Button>
+
             <Button
               variant="outline"
               onClick={handleLogout}

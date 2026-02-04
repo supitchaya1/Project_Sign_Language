@@ -14,7 +14,7 @@ import LoginPage from "@/pages/LoginPage";
 import RegisterPage from "@/pages/RegisterPage";
 import ProfilePage from "@/pages/ProfilePage";
 import NotFound from "@/pages/NotFound";
-import ProtectedRoute from "@/components/auth/ProtectedRoute";
+// import ProtectedRoute from "@/components/auth/ProtectedRoute";
 
 const queryClient = new QueryClient();
 
@@ -31,14 +31,7 @@ const App = () => (
                 <Route path="/" element={<HomePage />} />
                 <Route path="/translate" element={<TranslatePage />} />
                 <Route path="/result" element={<ResultPage />} />
-                <Route
-                  path="/history"
-                  element={
-                    <ProtectedRoute>
-                      <HistoryPage />
-                    </ProtectedRoute>
-                  }
-                />
+                <Route path="/history" element={<HistoryPage />} />
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/register" element={<RegisterPage />} />
                 <Route path="/profile" element={<ProfilePage />} />
