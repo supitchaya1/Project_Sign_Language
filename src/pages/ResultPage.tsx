@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useNavigate, useLocation } from "react-router-dom";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase";
 import PosePlayer from "@/components/PosePlayer";
 
 // ==========================================
@@ -40,14 +40,7 @@ interface ProcessedWordData {
 }
 
 // ==========================================
-// 3) Supabase Setup (frontend)
-// ==========================================
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-// ==========================================
-// 4) Helpers: Category Priority
+// 3) Helpers: Category Priority
 // ==========================================
 const CATEGORY_PRIORITY: Record<string, number> = {
   คำทั่วไป: 1,
@@ -77,7 +70,7 @@ function pickBestRow(token: string, rows: WordData[]): WordData {
 }
 
 // ==========================================
-// 5) Rule Engine (Thai -> ThSL Order)
+// 4) Rule Engine (Thai -> ThSL Order)
 // ==========================================
 type Role = "S" | "V" | "O" | "NEG" | "Adv(Time)" | "PP(Place)" | "Q" | "UNK";
 
@@ -111,26 +104,10 @@ function isPlaceWord(w: string) {
   ].includes(w);
 }
 function isPronoun(w: string) {
-  return ["ฉัน", "ผม", "หนู", "เรา", "คุณ", "เขา", "เธอ", "มัน", "พวกเรา"].includes(
-    w
-  );
+  return ["ฉัน", "ผม", "หนู", "เรา", "คุณ", "เขา", "เธอ", "มัน", "พวกเรา"].includes(w);
 }
 function isVerb(w: string) {
-  return [
-    "ไป",
-    "มา",
-    "กิน",
-    "นอน",
-    "เรียน",
-    "ทำงาน",
-    "ดู",
-    "ซื้อ",
-    "ขาย",
-    "ชอบ",
-    "รัก",
-    "ช่วย",
-    "เล่น",
-  ].includes(w);
+  return ["ไป", "มา", "กิน", "นอน", "เรียน", "ทำงาน", "ดู", "ซื้อ", "ขาย", "ชอบ", "รัก", "ช่วย", "เล่น"].includes(w);
 }
 
 function cleanTokens(tokens: string[]) {
@@ -175,7 +152,6 @@ function toThslOrder(tokens: string[]) {
 
   const collectRest = () => tagged.filter((_, i) => !used.has(i)).map((x) => x.word);
 
-  // เข้า rule เมื่อมี V (ไม่กว้างเกิน)
   if (roles.includes("V")) {
     const out: string[] = [];
 
@@ -206,7 +182,7 @@ function toThslOrder(tokens: string[]) {
 }
 
 // ==========================================
-// 6) Main Component
+// 5) Main Component
 // ==========================================
 export default function ResultPage() {
   const navigate = useNavigate();
@@ -214,8 +190,6 @@ export default function ResultPage() {
 
   const [foundWords, setFoundWords] = useState<ProcessedWordData[]>([]);
   const [loadingKeywords, setLoadingKeywords] = useState(false);
-
-  const [playlist, setPlaylist] = useState<string[]>([]);
   const [currentSinglePose, setCurrentSinglePose] = useState<string | null>(null);
 
   const state = location.state as ResultState | null;
@@ -235,7 +209,6 @@ export default function ResultPage() {
     const fetchKeywordsFromDB = async () => {
       if (thslKeywords.length === 0) {
         setFoundWords([]);
-        setPlaylist([]);
         setCurrentSinglePose(null);
         return;
       }
@@ -250,7 +223,6 @@ export default function ResultPage() {
       if (error) {
         console.error("Fetch keywords error:", error);
         setFoundWords([]);
-        setPlaylist([]);
         setCurrentSinglePose(null);
         setLoadingKeywords(false);
         return;
@@ -280,11 +252,7 @@ export default function ResultPage() {
       }));
 
       setFoundWords(processed);
-
-      const urls = processed.map((w) => w.fullUrl);
-      setPlaylist(urls);
-      setCurrentSinglePose(null);
-
+      setCurrentSinglePose(processed.length > 0 ? processed[0].fullUrl : null);
       setLoadingKeywords(false);
     };
 
@@ -292,13 +260,8 @@ export default function ResultPage() {
   }, [thslKeywords]);
 
   const handleDownload = () => {
-    const urlToDownload = currentSinglePose || (playlist.length > 0 ? playlist[0] : null);
-    if (urlToDownload) window.open(urlToDownload, "_blank");
+    if (currentSinglePose) window.open(currentSinglePose, "_blank");
   };
-
-  const poseKey = currentSinglePose
-    ? `single-${currentSinglePose}`
-    : `playlist-${playlist.length}-${playlist[0] ?? "none"}`;
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#E8D5F0] to-[#FEFBF4] dark:from-[#1a2f44] dark:to-[#0F1F2F] py-8 md:py-12">
@@ -322,19 +285,8 @@ export default function ResultPage() {
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
                 <Video size={18} className="text-[#263F5D]" />
-                <h2 className="font-semibold text-[#263F5D] text-sm">
-                  {currentSinglePose ? "เล่นเฉพาะคำ" : "วิดีโอภาษามือ"}
-                </h2>
+                <h2 className="font-semibold text-[#263F5D] text-sm">วิดีโอภาษามือ</h2>
               </div>
-
-              {currentSinglePose && (
-                <button
-                  onClick={() => setCurrentSinglePose(null)}
-                  className="text-xs text-[#263F5D] underline hover:text-white flex items-center gap-1"
-                >
-                  <RefreshCw size={12} /> เล่นทั้งหมด
-                </button>
-              )}
             </div>
 
             <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden mb-4 border border-white/10 shadow-inner">
@@ -343,17 +295,15 @@ export default function ResultPage() {
                   <RefreshCw className="animate-spin mb-2" />
                   <span className="text-xs">กำลังค้นหาท่าภาษามือ...</span>
                 </div>
-              ) : playlist.length > 0 || currentSinglePose ? (
+              ) : currentSinglePose ? (
                 <PosePlayer
-                  key={poseKey}
-                  poseUrl={currentSinglePose ?? undefined}
-                  poseUrls={currentSinglePose ? undefined : playlist}
+                  key={currentSinglePose}
+                  poseUrl={currentSinglePose}
                   width={640}
                   height={360}
-                  autoPlay
-                  loopPlaylist={!currentSinglePose}
-                  loopPose={!!currentSinglePose}
-                  showDebug={false}
+                  fps={24}
+                  confThreshold={0.05}
+                  flipY={false}
                 />
               ) : (
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
@@ -364,16 +314,16 @@ export default function ResultPage() {
             </div>
 
             <Button
-              disabled={playlist.length === 0 && !currentSinglePose}
+              disabled={!currentSinglePose}
               className="w-full bg-[#0F1F2F] hover:bg-[#1a2f44] text-white text-sm disabled:opacity-50 transition-colors"
               onClick={handleDownload}
             >
               <Download size={16} className="mr-2" />
-              ดาวน์โหลดวิดีโอ
+              ดาวน์โหลดไฟล์ .pose
             </Button>
           </motion.div>
 
-          {/* ✅ สีเดิมกลับมา: กล่องข้อความ + สรุป ใช้ bg-[#A6BFE3] */}
+          {/* Text + Summary */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -398,9 +348,7 @@ export default function ResultPage() {
             transition={{ delay: 0.4 }}
             className="border-2 border-[#223C55] dark:border-[#213B54] rounded-xl p-5 bg-[#A6BFE3]"
           >
-            <h2 className="font-semibold text-[#263F5D] mb-3 text-sm">
-              # คำสำคัญ
-            </h2>
+            <h2 className="font-semibold text-[#263F5D] mb-3 text-sm"># คำสำคัญ</h2>
 
             <div className="flex flex-wrap gap-2">
               {loadingKeywords ? (
@@ -408,7 +356,6 @@ export default function ResultPage() {
               ) : foundWords.length > 0 ? (
                 foundWords.map((item, idx) => {
                   const isActive = currentSinglePose === item.fullUrl;
-
                   return (
                     <Badge
                       key={`${item.word}-${idx}`}
@@ -428,9 +375,6 @@ export default function ResultPage() {
                 <p className="text-[#263F5D]/60 text-sm">ไม่พบคำสำคัญในฐานข้อมูล</p>
               )}
             </div>
-
-            <p className="text-[10px] text-[#263F5D]/50 mt-3 text-right">
-            </p>
           </motion.div>
 
           {/* Action Buttons */}

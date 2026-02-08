@@ -12,6 +12,12 @@ export default defineConfig(({ mode }) => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // ✅ เพิ่มบรรทัดนี้: บอก Vite ว่าถ้าเจอ import 'buffer' ให้ไปใช้ package ชื่อ 'buffer/'
+      buffer: "buffer/",
     },
+  },
+  // ✅ เพิ่มส่วนนี้: เพื่อแก้ปัญหา Library บางตัวที่พยายามเรียกใช้ตัวแปร global
+  define: {
+    "global": {},
   },
 }));
