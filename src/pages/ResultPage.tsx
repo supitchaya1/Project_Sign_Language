@@ -13,9 +13,20 @@ import PosePlayer from "@/components/PosePlayer";
 const BACKEND_URL =
   (import.meta.env.VITE_BACKEND_BASE as string) || "http://127.0.0.1:8000";
 
+// function buildPoseUrl(filename: string) {
+//   const clean = (filename ?? "").trim();
+//   return `${BACKEND_URL}/api/pose?name=${encodeURIComponent(clean)}`;
+// }
+
+function joinUrl(base: string, path: string) {
+  const b = (base ?? "").trim().replace(/\/+$/, ""); // ตัด / ท้าย
+  const p = (path ?? "").trim().replace(/^\/+/, ""); // ตัด / หน้า
+  return `${b}/${p}`;
+}
+
 function buildPoseUrl(filename: string) {
   const clean = (filename ?? "").trim();
-  return `${BACKEND_URL}/api/pose?name=${encodeURIComponent(clean)}`;
+  return `${joinUrl(BACKEND_URL, "api/pose")}?name=${encodeURIComponent(clean)}`;
 }
 
 // ==========================================

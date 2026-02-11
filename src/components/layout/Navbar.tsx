@@ -1,32 +1,85 @@
-import { Link, useLocation } from 'react-router-dom';
-import { Sun, Moon, Menu, X, User } from 'lucide-react';
-import { useState } from 'react';
-import { useAuth } from '@/contexts/AuthContext';
-import { useTheme } from '@/contexts/ThemeContext';
-import { Button } from '@/components/ui/button';
-import { motion, AnimatePresence } from 'framer-motion';
+import { Link, useLocation } from "react-router-dom";
+import { Sun, Moon, Menu, X, User } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useAuth } from "@/contexts/AuthContext";
+import { useTheme } from "@/contexts/ThemeContext";
+import { Button } from "@/components/ui/button";
+import { motion, AnimatePresence } from "framer-motion";
+import { supabase } from "@/lib/supabase";
 
 export default function Navbar() {
   const { isAuthenticated, user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
+
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+
+  // ✅ profile avatar from DB
+  const [profileAvatar, setProfileAvatar] = useState<string | null>(null);
+
   const location = useLocation();
+
   const displayName =
     user?.user_metadata?.name ||
     user?.user_metadata?.full_name ||
-    user?.email?.split('@')[0] ||
-    'ผู้ใช้';
+    user?.email?.split("@")[0] ||
+    "ผู้ใช้";
+
+  // ✅ Prefer profileAvatar (from DB) -> fallback to metadata (Google)
   const avatarUrl =
-    user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
+    profileAvatar ||
+    user?.user_metadata?.avatar_url ||
+    user?.user_metadata?.picture ||
+    null;
 
   const navLinks = [
-    { path: '/', label: 'หน้าหลัก' },
-    { path: '/translate', label: 'แปลเสียง' },
-    { path: '/history', label: 'ประวัติ' },
+    { path: "/", label: "หน้าหลัก" },
+    { path: "/translate", label: "แปลเสียง" },
+    { path: "/history", label: "ประวัติ" },
   ];
 
   const isActive = (path: string) => location.pathname === path;
+
+  // ✅ load avatar from profiles table
+  useEffect(() => {
+    const loadProfileAvatar = async () => {
+      if (!user?.id) {
+        setProfileAvatar(null);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("avatar_url")
+        .eq("id", user.id)
+        .single();
+
+      if (error) {
+        // ถ้า table/column ไม่ตรง จะ error ตรงนี้
+        setProfileAvatar(null);
+        return;
+      }
+
+      // กรณี avatar_url เป็น "URL" พร้อมใช้
+      setProfileAvatar(data?.avatar_url ?? null);
+
+      /**
+       * ✅ ถ้าคุณเก็บ avatar_url เป็น "path ใน Storage" เช่น "avatars/xxx.png"
+       * ให้คอมเมนต์บรรทัด setProfileAvatar(...) ด้านบน แล้วใช้โค้ดนี้แทน
+       *
+       * if (data?.avatar_url) {
+       *   const { data: pub } = supabase.storage.from("avatars").getPublicUrl(data.avatar_url);
+       *   setProfileAvatar(pub.publicUrl);
+       * } else {
+       *   setProfileAvatar(null);
+       * }
+       *
+       * (เปลี่ยน "avatars" ให้ตรงชื่อ bucket ของคุณ)
+       */
+    };
+
+    loadProfileAvatar();
+  }, [user?.id]);
 
   return (
     <nav className="sticky top-0 z-50 bg-[#0F1F2F] shadow-sm">
@@ -51,9 +104,9 @@ export default function Navbar() {
                   key={link.path}
                   to={link.path}
                   className={`font-medium text-sm transition-colors px-4 py-2 rounded-full ${
-                    isActive(link.path) 
-                      ? 'bg-white dark:bg-white/20 text-[#263F5D] dark:text-white shadow-sm' 
-                      : 'text-[#C9A7E3] hover:text-[#263F5D] dark:hover:text-white'
+                    isActive(link.path)
+                      ? "bg-white dark:bg-white/20 text-[#263F5D] dark:text-white shadow-sm"
+                      : "text-[#C9A7E3] hover:text-[#263F5D] dark:hover:text-white"
                   }`}
                 >
                   {link.label}
@@ -68,12 +121,12 @@ export default function Navbar() {
             <button
               onClick={toggleTheme}
               className={`flex items-center gap-2 px-4 py-1.5 rounded-full font-medium text-sm transition-all ${
-                theme === 'light' 
-                  ? 'bg-[#FEC530] text-[#0F1F2F]' 
-                  : 'bg-[#213B54] text-white border border-white/30'
+                theme === "light"
+                  ? "bg-[#FEC530] text-[#0F1F2F]"
+                  : "bg-[#213B54] text-white border border-white/30"
               }`}
             >
-              {theme === 'light' ? (
+              {theme === "light" ? (
                 <>
                   <Sun size={16} />
                   <span className="hidden sm:inline">โหมดสว่าง</span>
@@ -90,17 +143,24 @@ export default function Navbar() {
             {isAuthenticated && (
               <div className="relative">
                 <button
-                    onClick={() => setIsProfileOpen(!isProfileOpen)}
+                  onClick={() => setIsProfileOpen(!isProfileOpen)}
                   className="flex items-center gap-2"
                 >
                   <div className="w-9 h-9 rounded-full bg-[#C9A7E3] flex items-center justify-center overflow-hidden border-2 border-white dark:border-white/30">
                     {avatarUrl ? (
-                      <img src={avatarUrl} alt={displayName} className="w-full h-full object-cover" />
+                      <img
+                        src={avatarUrl}
+                        alt={displayName}
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                      />
                     ) : (
                       <User size={18} className="text-[#0F1F2F]" />
                     )}
                   </div>
-                  <span className="hidden lg:inline text-[#263F5D] dark:text-white font-medium text-sm">{displayName}</span>
+                  <span className="hidden lg:inline text-white font-semibold text-sm bg-white/10 px-3 py-1 rounded-full">
+                    {displayName}
+                  </span>
                 </button>
 
                 <AnimatePresence>
@@ -112,9 +172,14 @@ export default function Navbar() {
                       className="absolute right-0 mt-2 w-48 bg-white dark:bg-[#213B54] rounded-lg shadow-lg border border-[#223C55]/20 dark:border-white/20 overflow-hidden z-50"
                     >
                       <div className="p-3 border-b border-gray-200 dark:border-white/20">
-                        <p className="font-medium text-[#263F5D] dark:text-white text-sm">{displayName}</p>
-                        <p className="text-xs text-gray-500 dark:text-white/70">{user?.email}</p>
+                        <p className="font-medium text-[#263F5D] dark:text-white text-sm">
+                          {displayName}
+                        </p>
+                        <p className="text-xs text-gray-500 dark:text-white/70">
+                          {user?.email}
+                        </p>
                       </div>
+
                       <Link
                         to="/profile"
                         className="block px-3 py-2 text-[#263F5D] dark:text-white text-sm hover:bg-gray-100 dark:hover:bg-white/10"
@@ -122,6 +187,7 @@ export default function Navbar() {
                       >
                         จัดการบัญชี
                       </Link>
+
                       <button
                         onClick={() => {
                           logout();
@@ -141,16 +207,17 @@ export default function Navbar() {
             {!isAuthenticated && (
               <div className="hidden lg:flex items-center gap-2">
                 <Link to="/login">
-                  <Button 
-                    variant="outline" 
+                  <Button
+                    variant="outline"
                     size="sm"
                     className="border-[#223C55] dark:border-white/50 text-[#263F5D] dark:text-[#0F1F2F] bg-white hover:bg-gray-100 dark:bg-white dark:hover:bg-gray-100 rounded-full px-4"
                   >
                     เข้าสู่ระบบ
                   </Button>
                 </Link>
+
                 <Link to="/register">
-                  <Button 
+                  <Button
                     size="sm"
                     className="bg-[#0F1F2F] dark:bg-[#D8C0D0] text-[#C9A7E3] dark:text-[#0F1F2F] hover:bg-[#1a2f44] dark:hover:bg-[#c9b0c1] rounded-full px-4"
                   >
