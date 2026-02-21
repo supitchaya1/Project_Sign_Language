@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Download, Video, RefreshCw } from "lucide-react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
@@ -13,14 +13,9 @@ import PosePlayer from "@/components/PosePlayer";
 const BACKEND_URL =
   (import.meta.env.VITE_BACKEND_BASE as string) || "http://127.0.0.1:8000";
 
-// function buildPoseUrl(filename: string) {
-//   const clean = (filename ?? "").trim();
-//   return `${BACKEND_URL}/api/pose?name=${encodeURIComponent(clean)}`;
-// }
-
 function joinUrl(base: string, path: string) {
-  const b = (base ?? "").trim().replace(/\/+$/, ""); // ตัด / ท้าย
-  const p = (path ?? "").trim().replace(/^\/+/, ""); // ตัด / หน้า
+  const b = (base ?? "").trim().replace(/\/+$/, "");
+  const p = (path ?? "").trim().replace(/^\/+/, "");
   return `${b}/${p}`;
 }
 
@@ -47,6 +42,7 @@ interface WordData {
 interface ProcessedWordData {
   word: string;
   category: string;
+  pose_filename: string;
   fullUrl: string;
 }
 
@@ -201,7 +197,14 @@ export default function ResultPage() {
 
   const [foundWords, setFoundWords] = useState<ProcessedWordData[]>([]);
   const [loadingKeywords, setLoadingKeywords] = useState(false);
+
+  // ✅ single pose preview
   const [currentSinglePose, setCurrentSinglePose] = useState<string | null>(null);
+
+  // ✅ sentence mp4 url (blob)
+  const [sentenceVideoUrl, setSentenceVideoUrl] = useState<string | null>(null);
+  const [loadingSentenceVideo, setLoadingSentenceVideo] = useState(false);
+  const prevBlobUrl = useRef<string | null>(null);
 
   const state = location.state as ResultState | null;
 
@@ -216,26 +219,42 @@ export default function ResultPage() {
     return toThslOrder(tokens);
   }, [resultData.keywords]);
 
+  // helper: cleanup blob url
+  const setNewBlobUrl = (url: string | null) => {
+    if (prevBlobUrl.current) {
+      URL.revokeObjectURL(prevBlobUrl.current);
+      prevBlobUrl.current = null;
+    }
+    if (url) prevBlobUrl.current = url;
+    setSentenceVideoUrl(url);
+  };
+
   useEffect(() => {
     const fetchKeywordsFromDB = async () => {
       if (thslKeywords.length === 0) {
         setFoundWords([]);
         setCurrentSinglePose(null);
+        setNewBlobUrl(null);
         return;
       }
 
       setLoadingKeywords(true);
+      setLoadingSentenceVideo(true);
+      setNewBlobUrl(null);
+
+      const unique = Array.from(new Set(thslKeywords));
 
       const { data, error } = await supabase
         .from("SL_word")
         .select("word, category, pose_filename")
-        .in("word", Array.from(new Set(thslKeywords)));
+        .in("word", unique);
 
       if (error) {
         console.error("Fetch keywords error:", error);
         setFoundWords([]);
         setCurrentSinglePose(null);
         setLoadingKeywords(false);
+        setLoadingSentenceVideo(false);
         return;
       }
 
@@ -259,19 +278,73 @@ export default function ResultPage() {
       const processed: ProcessedWordData[] = picked.map((item) => ({
         word: item.word,
         category: item.category,
+        pose_filename: item.pose_filename,
         fullUrl: buildPoseUrl(item.pose_filename),
       }));
 
       setFoundWords(processed);
       setCurrentSinglePose(processed.length > 0 ? processed[0].fullUrl : null);
       setLoadingKeywords(false);
+
+      // ✅ call backend concat_video to create mp4 for the whole sentence
+      try {
+        if (processed.length === 0) {
+          setLoadingSentenceVideo(false);
+          setNewBlobUrl(null);
+          return;
+        }
+
+        const filenames = processed
+          .map((x) => (x.pose_filename ?? "").trim())
+          .filter(Boolean);
+
+        const resp = await fetch(joinUrl(BACKEND_URL, "api/concat_video"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            pose_filenames: filenames,
+            output_name: "sentence.mp4",
+          }),
+        });
+
+        if (!resp.ok) {
+          const text = await resp.text();
+          console.error("concat_video failed:", resp.status, text);
+          setLoadingSentenceVideo(false);
+          setNewBlobUrl(null);
+          return;
+        }
+
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        setNewBlobUrl(url);
+        setLoadingSentenceVideo(false);
+      } catch (e) {
+        console.error("concat_video error:", e);
+        setLoadingSentenceVideo(false);
+        setNewBlobUrl(null);
+      }
     };
 
     fetchKeywordsFromDB();
-  }, [thslKeywords]);
 
-  const handleDownload = () => {
+    // cleanup on unmount
+    return () => {
+      if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [thslKeywords.join("|")]);
+
+  const handleDownloadPose = () => {
     if (currentSinglePose) window.open(currentSinglePose, "_blank");
+  };
+
+  const handleDownloadSentenceVideo = () => {
+    if (!sentenceVideoUrl) return;
+    const a = document.createElement("a");
+    a.href = sentenceVideoUrl;
+    a.download = "sentence.mp4";
+    a.click();
   };
 
   return (
@@ -286,7 +359,52 @@ export default function ResultPage() {
         </motion.h1>
 
         <div className="space-y-4">
-          {/* Pose Player */}
+          {/* Sentence Video (mp4) */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.05 }}
+            className="border-2 border-[#223C55] dark:border-[#213B54] rounded-xl p-5 bg-[#A6BFE3]"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Video size={18} className="text-[#263F5D]" />
+                <h2 className="font-semibold text-[#263F5D] text-sm">วิดีโอภาษามือ (ทั้งประโยค)</h2>
+              </div>
+            </div>
+
+            <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden mb-4 border border-white/10 shadow-inner">
+              {loadingKeywords || loadingSentenceVideo ? (
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
+                  <RefreshCw className="animate-spin mb-2" />
+                  <span className="text-xs">กำลังสร้างวิดีโอทั้งประโยค...</span>
+                </div>
+              ) : sentenceVideoUrl ? (
+                <video
+                  className="w-full h-full object-contain"
+                  src={sentenceVideoUrl}
+                  controls
+                  playsInline
+                />
+              ) : (
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
+                  <span className="text-3xl mb-2">🚫</span>
+                  <span className="text-xs">สร้างวิดีโอไม่สำเร็จ (เช็ค backend / pose_concat)</span>
+                </div>
+              )}
+            </div>
+
+            <Button
+              disabled={!sentenceVideoUrl}
+              className="w-full bg-[#0F1F2F] hover:bg-[#1a2f44] text-white text-sm disabled:opacity-50 transition-colors"
+              onClick={handleDownloadSentenceVideo}
+            >
+              <Download size={16} className="mr-2" />
+              ดาวน์โหลดวิดีโอทั้งประโยค (.mp4)
+            </Button>
+          </motion.div>
+
+          {/* Single Pose Preview (PosePlayer) */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -296,7 +414,7 @@ export default function ResultPage() {
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
                 <Video size={18} className="text-[#263F5D]" />
-                <h2 className="font-semibold text-[#263F5D] text-sm">วิดีโอภาษามือ</h2>
+                <h2 className="font-semibold text-[#263F5D] text-sm">ดูทีละคำ (Pose)</h2>
               </div>
             </div>
 
@@ -327,7 +445,7 @@ export default function ResultPage() {
             <Button
               disabled={!currentSinglePose}
               className="w-full bg-[#0F1F2F] hover:bg-[#1a2f44] text-white text-sm disabled:opacity-50 transition-colors"
-              onClick={handleDownload}
+              onClick={handleDownloadPose}
             >
               <Download size={16} className="mr-2" />
               ดาวน์โหลดไฟล์ .pose

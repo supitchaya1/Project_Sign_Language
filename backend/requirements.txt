@@ -1,0 +1,9 @@
+supabase
+python-dotenv
+fastapi
+uvicorn
+pose-format
+spoken-to-signed
+tensorflow
+numpy
+pandas

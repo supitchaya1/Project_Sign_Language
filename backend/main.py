@@ -1,4 +1,6 @@
 import os
+import uuid
+import traceback
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -6,8 +8,13 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from dotenv import load_dotenv
+from pydantic import BaseModel
 
 from supabase import create_client, Client
+from pose_format import Pose
+
+# ✅ import pose_concat
+from pose_concat.concat_poses import pose_sequence
 
 # =========================
 # 0) Load .env
@@ -19,6 +26,14 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
 
 POSE_DIR_ENV = os.getenv("POSE_DIR", "./poses").strip()
 POSE_DIR = Path(POSE_DIR_ENV).expanduser().resolve()
+
+VIDEO_DIR_ENV = os.getenv("VIDEO_DIR", "").strip()
+VIDEO_DIR = (
+    Path(VIDEO_DIR_ENV).expanduser().resolve()
+    if VIDEO_DIR_ENV
+    else (POSE_DIR / "_videos").resolve()
+)
+VIDEO_DIR.mkdir(parents=True, exist_ok=True)
 
 PORT = int(os.getenv("PORT", "8000"))
 
@@ -35,7 +50,7 @@ else:
         "http://127.0.0.1:8080",
     ]
 
-app = FastAPI(title="ThSL Backend (Supabase + Local Pose Files)")
+app = FastAPI(title="ThSL Backend (Supabase + Local Pose Files + Pose Concat)")
 
 app.add_middleware(
     CORSMiddleware,
@@ -70,9 +85,7 @@ def resolve_pose_path(filename: str) -> Path:
     if ".." in filename or filename.startswith("/") or filename.startswith("\\"):
         raise HTTPException(status_code=400, detail="Invalid filename (security check)")
 
-    # ป้องกันชื่อไฟล์แปลกๆ
     filename = filename.strip()
-
     full_path = (POSE_DIR / filename).resolve()
 
     # ต้องอยู่ใต้ POSE_DIR เท่านั้น
@@ -87,25 +100,16 @@ def resolve_pose_path(filename: str) -> Path:
 # =========================
 # 3) Pose meta scan + cache
 # =========================
-# เก็บ meta ต่อไฟล์ไว้ใน memory (เร็วขึ้น)
 POSE_META_CACHE: Dict[str, Dict[str, Any]] = {}
 
 def find_binary_offset_and_frames(path: Path, landmarks: int = 33) -> Dict[str, Any]:
-    """
-    หา offset ของ binary float32 แบบ robust:
-    - scan หา offset ที่ทำให้ (size - offset - pad) % frame_bytes == 0
-    - frame_bytes = landmarks * 4(xyzc) * 4(bytes)
-    """
     size = path.stat().st_size
     frame_bytes = landmarks * 4 * 4
 
     if size < 1024:
         raise ValueError("file too small")
 
-    # header น่าจะไม่เกิน 200KB (กันไว้)
     scan_end = min(size, 200_000)
-
-    # ช่วยเลือก offset ที่ใกล้ค่าที่มักเจอ (เผื่อไฟล์แนวเดียวกัน)
     target = 14652
 
     best = None  # (score, offset, frames, pad)
@@ -117,13 +121,11 @@ def find_binary_offset_and_frames(path: Path, landmarks: int = 33) -> Dict[str, 
             if remain % frame_bytes == 0:
                 frames = remain // frame_bytes
                 if frames >= 10:
-                    # score: ใกล้ target มากยิ่งดี + header ต้องไม่เล็กผิดปกติ
                     score = abs(off - target)
                     if best is None or score < best[0]:
                         best = (score, off, frames, pad)
 
         if best is not None:
-            # เจอแล้วใน pad นี้ก็พอ
             break
 
     if best is None:
@@ -139,6 +141,12 @@ def find_binary_offset_and_frames(path: Path, landmarks: int = 33) -> Dict[str, 
         "frame_bytes": frame_bytes,
     }
 
+# =========================
+# 3.5) Concat request model
+# =========================
+class ConcatRequest(BaseModel):
+    pose_filenames: List[str]
+    output_name: Optional[str] = None
 
 # =========================
 # 4) Endpoints
@@ -148,6 +156,7 @@ def read_root():
     return {
         "message": "ThSL API is running!",
         "pose_dir": str(POSE_DIR),
+        "video_dir": str(VIDEO_DIR),
         "cors_origins": CORS_ORIGINS,
     }
 
@@ -159,32 +168,32 @@ def health():
         "supabase_connected": supabase is not None,
         "pose_directory_exists": POSE_DIR.exists(),
         "pose_directory_path": str(POSE_DIR),
+        "video_directory_exists": VIDEO_DIR.exists(),
+        "video_directory_path": str(VIDEO_DIR),
     }
 
 
 @app.get("/api/resolve")
 def resolve_word(word: str = Query(..., description="คำศัพท์ภาษาไทยที่ต้องการค้นหา")):
-    """
-    ค้นหาใน Supabase (table: SL_word) → pose_filename
-    ถ้าไม่เจอ: fallback เป็น {word}.pose ถ้ามีไฟล์อยู่ในเครื่อง
-    """
     word = (word or "").strip()
     if not word:
         raise HTTPException(status_code=400, detail="word cannot be empty")
 
-    # 1) Supabase
     if supabase is not None:
         try:
-            res = supabase.table("SL_word").select("word,category,pose_filename").eq("word", word).execute()
+            res = (
+                supabase.table("SL_word")
+                .select("word,category,pose_filename")
+                .eq("word", word)
+                .execute()
+            )
             rows = res.data or []
         except Exception as e:
-            # ถ้า DB ล่ม ไม่ต้องพังทั้งระบบ
             print(f"❌ DB Error: {e}")
             rows = []
     else:
         rows = []
 
-    # ถ้าเจอใน DB
     if rows:
         out = []
         for row in rows:
@@ -192,7 +201,6 @@ def resolve_word(word: str = Query(..., description="คำศัพท์ภา
             if not filename:
                 continue
 
-            # เช็คมีไฟล์จริงไหม (optional แต่ช่วย debug)
             try:
                 file_path = resolve_pose_path(filename)
                 exists = file_path.exists()
@@ -204,13 +212,11 @@ def resolve_word(word: str = Query(..., description="คำศัพท์ภา
                 "category": row.get("category"),
                 "pose_filename": filename,
                 "file_exists_on_disk": exists,
-                # ให้ frontend เอาไปต่อ BACKEND_BASE ได้เลย
                 "url": f"/api/pose?name={filename}",
             })
 
         return {"found": True, "source": "database", "files": out}
 
-    # 2) fallback file on disk: "{word}.pose"
     direct_filename = f"{word}.pose"
     direct_path = (POSE_DIR / direct_filename)
     if direct_path.exists():
@@ -231,9 +237,6 @@ def resolve_word(word: str = Query(..., description="คำศัพท์ภา
 
 @app.get("/api/pose")
 def get_pose_file(name: str = Query(..., description="ชื่อไฟล์ .pose (รวม .pose)")):
-    """
-    ส่งไฟล์ .pose จากเครื่อง (POSE_DIR)
-    """
     name = (name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="name cannot be empty")
@@ -251,13 +254,6 @@ def get_pose_file(name: str = Query(..., description="ชื่อไฟล์ .
 
 @app.get("/api/pose_meta")
 def pose_meta(name: str = Query(..., description="ชื่อไฟล์ .pose (รวม .pose)")):
-    """
-    คืน meta ของไฟล์ .pose:
-    - offset ที่ถูกต้อง
-    - frames
-    - landmarks
-    เพื่อให้ frontend parse float32 ได้ตรง (แก้ skeleton ไม่ขึ้น)
-    """
     name = (name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="name cannot be empty")
@@ -266,7 +262,6 @@ def pose_meta(name: str = Query(..., description="ชื่อไฟล์ .pose
     if not file_path.exists():
         raise HTTPException(status_code=404, detail=f"File '{name}' not found on disk")
 
-    # cache by (name + mtime + size) กันไฟล์เปลี่ยน
     stat = file_path.stat()
     cache_key = f"{name}:{stat.st_size}:{int(stat.st_mtime)}"
 
@@ -278,9 +273,88 @@ def pose_meta(name: str = Query(..., description="ชื่อไฟล์ .pose
         meta["name"] = name
         meta["pose_dir"] = str(POSE_DIR)
 
-        POSE_META_CACHE.clear()  # เคลียร์แบบง่าย (กันกิน ram)
+        POSE_META_CACHE.clear()
         POSE_META_CACHE[cache_key] = meta
 
         return JSONResponse(meta)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# =========================
+# ✅ NEW: Concat pose -> mp4
+# =========================
+@app.post("/api/concat_video")
+def concat_video(req: ConcatRequest):
+    try:
+        if not req.pose_filenames:
+            raise HTTPException(status_code=400, detail="pose_filenames cannot be empty")
+
+        # 1) resolve + validate
+        pose_paths: List[Path] = []
+        for name in req.pose_filenames:
+            clean = (name or "").strip()
+            if not clean:
+                continue
+            p = resolve_pose_path(clean)
+            if not p.exists():
+                raise HTTPException(status_code=404, detail=f"Pose file not found: {clean}")
+            pose_paths.append(p)
+
+        if not pose_paths:
+            raise HTTPException(status_code=400, detail="No valid pose files provided")
+
+        print("✅ /api/concat_video pose_filenames =", [p.name for p in pose_paths])
+
+        # 2) load Pose objects
+        poses: List[Pose] = []
+        for p in pose_paths:
+            with open(p, "rb") as f:
+                poses.append(Pose.read(f.read()))
+
+        # 3) output path (กันชื่อชน + กัน path traversal)
+        out_name = (req.output_name or "").strip()
+        if not out_name:
+            out_name = f"thsl_{uuid.uuid4().hex}.mp4"
+        if not out_name.lower().endswith(".mp4"):
+            out_name += ".mp4"
+
+        out_path = (VIDEO_DIR / out_name).resolve()
+        try:
+            out_path.relative_to(VIDEO_DIR)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid output_name (security check)")
+
+        # ถ้าไฟล์ชื่อซ้ำ ให้สุ่มชื่อใหม่
+        if out_path.exists():
+            out_path = (VIDEO_DIR / f"thsl_{uuid.uuid4().hex}.mp4").resolve()
+
+        print("✅ /api/concat_video output =", str(out_path))
+
+        # 4) call pose_concat
+        try:
+            # ต้องให้ pose_sequence รองรับ output_path
+            pose_sequence(poses, output_path=str(out_path))
+        except TypeError as e:
+            raise HTTPException(
+                status_code=500,
+                detail="pose_sequence() ยังไม่รองรับ output_path → กรุณาแก้ pose_concat/concat_poses.py ให้รับ output_path"
+            ) from e
+
+        # เช็คว่าไฟล์ถูกสร้างจริง
+        if not out_path.exists() or out_path.stat().st_size < 1024:
+            raise HTTPException(status_code=500, detail="Video file was not created or is too small")
+
+        return FileResponse(
+            path=str(out_path),
+            media_type="video/mp4",
+            filename=out_path.name
+        )
+
+    except HTTPException:
+        # ปล่อยให้ FastAPI ส่ง detail ออกไป
+        raise
+    except Exception as e:
+        print("❌ /api/concat_video ERROR:", repr(e))
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"concat_video failed: {type(e).__name__}: {e}")
