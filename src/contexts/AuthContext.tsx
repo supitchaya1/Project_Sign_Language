@@ -1,6 +1,13 @@
-import React, { createContext, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
-import type { Session, User } from '@supabase/supabase-js';
-import { supabase } from '@/lib/supabase';
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  ReactNode,
+} from "react";
+import type { Session, User } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase";
 
 interface AuthContextType {
   session: Session | null;
@@ -25,21 +32,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let isMounted = true;
 
+    // โหลด session ตอนเปิดเว็บ
     supabase.auth.getSession().then(({ data, error }) => {
       if (!isMounted) return;
       if (error) {
-        console.error(error);
+        console.error("getSession error:", error);
       }
       setSession(data.session ?? null);
       setUser(data.session?.user ?? null);
       setLoading(false);
     });
 
-    const { data } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      setSession(newSession);
-      setUser(newSession?.user ?? null);
-      setLoading(false);
-    });
+    // ฟัง auth state change
+    const { data } = supabase.auth.onAuthStateChange(
+      (_event, newSession) => {
+        setSession(newSession);
+        setUser(newSession?.user ?? null);
+        setLoading(false);
+      }
+    );
 
     return () => {
       isMounted = false;
@@ -49,14 +60,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const userId = user?.id ?? null;
 
+  // ========================
+  // LOGIN
+  // ========================
   const login = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
     if (error) throw error;
   };
 
+  // ========================
+  // LOGIN WITH GOOGLE
+  // ========================
   const loginWithGoogle = async () => {
     const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
+      provider: "google",
       options: {
         redirectTo: window.location.origin,
       },
@@ -64,36 +84,76 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw error;
   };
 
-  const register = async (name: string, email: string, password: string) => {
+  // ========================
+  // REGISTER
+  // ========================
+  const register = async (
+    name: string,
+    email: string,
+    password: string
+  ) => {
     const { error } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        data: {
-          name,
-        },
+        data: { name },
       },
     });
     if (error) throw error;
   };
 
+  // ========================
+  // LOGOUT (แก้ปัญหา ERR_CONNECTION_RESET)
+  // ========================
   const logout = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
+    // ล้าง state ฝั่ง UI ทันที ป้องกันค้าง
+    setSession(null);
+    setUser(null);
+
+    try {
+      // พยายาม revoke ทุก device ก่อน
+      const { error } = await supabase.auth.signOut({
+        scope: "global",
+      });
+      if (error) throw error;
+    } catch (err) {
+      console.warn(
+        "Global signOut failed → fallback to local",
+        err
+      );
+
+      // ถ้า network ล้มเหลว ให้ล้างเฉพาะเครื่องนี้
+      const { error: localError } =
+        await supabase.auth.signOut({
+          scope: "local",
+        });
+
+      if (localError) throw localError;
+    }
   };
 
-  const updateProfile = async (name: string, avatarUrl?: string | null) => {
+  // ========================
+  // UPDATE PROFILE
+  // ========================
+  const updateProfile = async (
+    name: string,
+    avatarUrl?: string | null
+  ) => {
     const { error, data } = await supabase.auth.updateUser({
       data: {
         name,
         avatar_url: avatarUrl ?? null,
       },
     });
+
     if (error) throw error;
     setUser(data.user);
   };
 
-  const isAuthenticated = useMemo(() => !!session?.user, [session]);
+  const isAuthenticated = useMemo(
+    () => !!session?.user,
+    [session]
+  );
 
   return (
     <AuthContext.Provider
@@ -117,8 +177,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
+  if (!context) {
+    throw new Error("useAuth must be used within AuthProvider");
   }
   return context;
 }
