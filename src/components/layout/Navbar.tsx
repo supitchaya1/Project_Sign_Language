@@ -82,7 +82,7 @@ export default function Navbar() {
   }, [user?.id]);
 
   return (
-    <nav className="sticky top-0 z-50 bg-[#0F1F2F] shadow-sm">
+    <nav className="sticky top-0 z-[999] bg-[#0F1F2F] shadow-sm isolate">
       <div className="container mx-auto px-4">
         <div className="flex items-center justify-between h-14">
           {/* Mobile Menu Button */}

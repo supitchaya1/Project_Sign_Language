@@ -24,6 +24,7 @@ const COLORS = {
   torso: "#5AA7FF",
 
   head: "#FFD84D",
+  /* head: "#fbe1ceff", */
   cheek: "rgba(255,120,170,0.22)",
 
   eye: "#0B0F14",

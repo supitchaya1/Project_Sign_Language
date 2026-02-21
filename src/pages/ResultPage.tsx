@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Download, Video, RefreshCw } from "lucide-react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
@@ -46,109 +46,50 @@ interface ProcessedWordData {
   fullUrl: string;
 }
 
+type Role = "S" | "V" | "O" | "NEG" | "Adv(Time)" | "PP(Place)" | "Q";
+
+interface CategoryRoleRow {
+  category: string;
+  role: Role;
+  priority: number;
+}
+
 // ==========================================
-// 3) Helpers: Category Priority
+// 3) Token utils
 // ==========================================
-const CATEGORY_PRIORITY: Record<string, number> = {
-  คำทั่วไป: 1,
-  กริยา: 2,
-  สถานที่: 3,
-  จำนวน: 4,
-  ตัวเลข: 5,
-  การเขียนสะกดนิ้วมือ: 6,
-};
+function normalizeThaiToken(s: string) {
+  return (s ?? "")
+    .replace(/\u200B|\u200C|\u200D|\uFEFF/g, "") // zero-width
+    .trim();
+}
+
+function cleanTokens(tokens: string[]) {
+  return (tokens || []).map(normalizeThaiToken).filter(Boolean);
+}
 
 function isNumberToken(token: string) {
   return /^[0-9]+$/.test(token);
 }
 
-function pickBestRow(token: string, rows: WordData[]): WordData {
-  return rows
-    .slice()
-    .sort((a, b) => {
-      const pa = CATEGORY_PRIORITY[a.category] ?? 999;
-      const pb = CATEGORY_PRIORITY[b.category] ?? 999;
-
-      const boostA = isNumberToken(token) && a.category === "ตัวเลข" ? -1000 : 0;
-      const boostB = isNumberToken(token) && b.category === "ตัวเลข" ? -1000 : 0;
-
-      return pa + boostA - (pb + boostB);
-    })[0];
-}
-
 // ==========================================
-// 4) Rule Engine (Thai -> ThSL Order)
+// 4) Reorder by DB role (Thai -> ThSL Order)
 // ==========================================
-type Role = "S" | "V" | "O" | "NEG" | "Adv(Time)" | "PP(Place)" | "Q" | "UNK";
-
-function isNeg(w: string) {
-  return ["ไม่", "ไม่มี", "ห้าม", "อย่า"].includes(w);
-}
-function isTimeWord(w: string) {
-  return [
-    "วันนี้",
-    "พรุ่งนี้",
-    "เมื่อวาน",
-    "ตอนนี้",
-    "เช้า",
-    "สาย",
-    "บ่าย",
-    "เย็น",
-    "กลางคืน",
-    "เดี๋ยวนี้",
-  ].includes(w);
-}
-function isPlaceWord(w: string) {
-  return [
-    "บ้าน",
-    "โรงเรียน",
-    "มหาวิทยาลัย",
-    "ตลาด",
-    "โรงพยาบาล",
-    "ที่ทำงาน",
-    "ห้องน้ำ",
-    "ร้าน",
-  ].includes(w);
-}
-function isPronoun(w: string) {
-  return ["ฉัน", "ผม", "หนู", "เรา", "คุณ", "เขา", "เธอ", "มัน", "พวกเรา"].includes(w);
-}
-function isVerb(w: string) {
-  return ["ไป", "มา", "กิน", "นอน", "เรียน", "ทำงาน", "ดู", "ซื้อ", "ขาย", "ชอบ", "รัก", "ช่วย", "เล่น"].includes(w);
-}
-
-function cleanTokens(tokens: string[]) {
-  return (tokens || []).map((t) => (t ?? "").trim()).filter(Boolean);
-}
-
-function tagToken(w: string): Role {
-  if (isNeg(w)) return "NEG";
-  if (isTimeWord(w)) return "Adv(Time)";
-  if (isPlaceWord(w)) return "PP(Place)";
-  if (isPronoun(w)) return "S";
-  if (isVerb(w)) return "V";
-  if (["ไหม", "?", "หรือเปล่า"].includes(w)) return "Q";
-  if (isNumberToken(w)) return "O";
-  return "O";
-}
-
-function toThslOrder(tokens: string[]) {
-  const tagged = cleanTokens(tokens).map((w) => ({ word: w, role: tagToken(w) }));
-  const roles = tagged.map((x) => x.role);
+function toThslOrderByRole(items: { word: string; role: Role }[]) {
+  // ลำดับ ThSL ที่เธอใช้: เวลา, สถานที่, ประธาน, กรรม(ทั้งหมด), กริยา, ปฏิเสธ, คำถาม, ที่เหลือ
   const used = new Set<number>();
 
-  const takeRole = (role: Role) => {
-    const idx = tagged.findIndex((x, i) => !used.has(i) && x.role === role);
+  const takeFirst = (role: Role) => {
+    const idx = items.findIndex((x, i) => !used.has(i) && x.role === role);
     if (idx >= 0) {
       used.add(idx);
-      return tagged[idx].word;
+      return items[idx].word;
     }
     return null;
   };
 
-  const takeAllRole = (role: Role) => {
+  const takeAll = (role: Role) => {
     const out: string[] = [];
-    tagged.forEach((x, i) => {
+    items.forEach((x, i) => {
       if (!used.has(i) && x.role === role) {
         used.add(i);
         out.push(x.word);
@@ -157,35 +98,30 @@ function toThslOrder(tokens: string[]) {
     return out;
   };
 
-  const collectRest = () => tagged.filter((_, i) => !used.has(i)).map((x) => x.word);
+  const rest = () => items.filter((_, i) => !used.has(i)).map((x) => x.word);
 
-  if (roles.includes("V")) {
-    const out: string[] = [];
+  const out: string[] = [];
+  const t = takeFirst("Adv(Time)");
+  if (t) out.push(t);
 
-    const t = takeRole("Adv(Time)");
-    if (t) out.push(t);
+  const p = takeFirst("PP(Place)");
+  if (p) out.push(p);
 
-    const p = takeRole("PP(Place)");
-    if (p) out.push(p);
+  const s = takeFirst("S");
+  if (s) out.push(s);
 
-    const s = takeRole("S");
-    if (s) out.push(s);
+  out.push(...takeAll("O"));
 
-    out.push(...takeAllRole("O"));
+  const v = takeFirst("V");
+  if (v) out.push(v);
 
-    const v = takeRole("V");
-    if (v) out.push(v);
+  const n = takeFirst("NEG");
+  if (n) out.push(n);
 
-    const n = takeRole("NEG");
-    if (n) out.push(n);
+  const q = takeFirst("Q");
+  if (q) out.push(q);
 
-    const q = takeRole("Q");
-    if (q) out.push(q);
-
-    return [...out, ...collectRest()];
-  }
-
-  return tagged.map((x) => x.word);
+  return [...out, ...rest()].filter(Boolean);
 }
 
 // ==========================================
@@ -197,6 +133,9 @@ export default function ResultPage() {
 
   const [foundWords, setFoundWords] = useState<ProcessedWordData[]>([]);
   const [loadingKeywords, setLoadingKeywords] = useState(false);
+
+  type ViewMode = "sentence" | "single";
+  const [viewMode, setViewMode] = useState<ViewMode>("sentence");
 
   // ✅ single pose preview
   const [currentSinglePose, setCurrentSinglePose] = useState<string | null>(null);
@@ -214,11 +153,6 @@ export default function ResultPage() {
     keywords: state?.keywords || [],
   };
 
-  const thslKeywords = useMemo(() => {
-    const tokens = cleanTokens(resultData.keywords || []);
-    return toThslOrder(tokens);
-  }, [resultData.keywords]);
-
   // helper: cleanup blob url
   const setNewBlobUrl = (url: string | null) => {
     if (prevBlobUrl.current) {
@@ -230,8 +164,9 @@ export default function ResultPage() {
   };
 
   useEffect(() => {
-    const fetchKeywordsFromDB = async () => {
-      if (thslKeywords.length === 0) {
+    const run = async () => {
+      const tokens = cleanTokens(resultData.keywords || []);
+      if (tokens.length === 0) {
         setFoundWords([]);
         setCurrentSinglePose(null);
         setNewBlobUrl(null);
@@ -242,7 +177,28 @@ export default function ResultPage() {
       setLoadingSentenceVideo(true);
       setNewBlobUrl(null);
 
-      const unique = Array.from(new Set(thslKeywords));
+      // 1) โหลด mapping: category -> role, priority
+      const { data: mapData, error: mapErr } = await supabase
+        .from("sl_category_role")
+        .select("category, role, priority");
+
+      if (mapErr) {
+        console.error("❌ Load sl_category_role error:", mapErr);
+        // ถ้า mapping ไม่มี/ผิดพลาด: treat ทุกคำเป็น O เพื่อให้ระบบยังทำงานได้
+      }
+
+      const roleMap = new Map<string, { role: Role; priority: number }>();
+      (mapData as CategoryRoleRow[] | null)?.forEach((r) => {
+        roleMap.set(normalizeThaiToken(r.category), { role: r.role, priority: r.priority ?? 999 });
+      });
+
+      const getRole = (category: string): { role: Role; priority: number } => {
+        const key = normalizeThaiToken(category);
+        return roleMap.get(key) ?? { role: "O", priority: 999 };
+      };
+
+      // 2) query SL_word เฉพาะคำที่ต้องใช้
+      const unique = Array.from(new Set(tokens));
 
       const { data, error } = await supabase
         .from("SL_word")
@@ -250,7 +206,7 @@ export default function ResultPage() {
         .in("word", unique);
 
       if (error) {
-        console.error("Fetch keywords error:", error);
+        console.error("Fetch SL_word error:", error);
         setFoundWords([]);
         setCurrentSinglePose(null);
         setLoadingKeywords(false);
@@ -258,25 +214,65 @@ export default function ResultPage() {
         return;
       }
 
-      const rawData = (data as WordData[]) || [];
+      const raw = (data as WordData[]) || [];
 
+      // group: word -> rows[]
       const grouped = new Map<string, WordData[]>();
-      for (const row of rawData) {
-        if (!grouped.has(row.word)) grouped.set(row.word, []);
-        grouped.get(row.word)!.push(row);
+      raw.forEach((row) => {
+        const w = normalizeThaiToken(row.word);
+        if (!grouped.has(w)) grouped.set(w, []);
+        grouped.get(w)!.push(row);
+      });
+
+      // 3) เลือก pose ที่ “ดีที่สุด” ต่อ token โดยใช้ priority จาก sl_category_role (ไม่ hardcode)
+      const pickBestRow = (token: string, rows: WordData[]) => {
+        const t = normalizeThaiToken(token);
+
+        return rows
+          .slice()
+          .sort((a, b) => {
+            const ra = getRole(a.category);
+            const rb = getRole(b.category);
+
+            // ถ้า token เป็นตัวเลข ให้เอา category ตัวเลขก่อน
+            const boostA = isNumberToken(t) && a.category === "ตัวเลข" ? -1000 : 0;
+            const boostB = isNumberToken(t) && b.category === "ตัวเลข" ? -1000 : 0;
+
+            return (ra.priority + boostA) - (rb.priority + boostB);
+          })[0];
+      };
+
+      // 4) สร้าง list ที่มี role ของแต่ละ token (ตามลำดับ tokens เดิมก่อน)
+      const tokenWithRole: { word: string; role: Role }[] = [];
+      const pickedRowsInTokenOrder: WordData[] = [];
+
+      for (const t of tokens) {
+        const rows = grouped.get(t) ?? [];
+        if (rows.length === 0) continue; // ไม่เจอใน DB
+        const best = rows.length === 1 ? rows[0] : pickBestRow(t, rows);
+        const r = getRole(best.category);
+        tokenWithRole.push({ word: t, role: r.role });
+        pickedRowsInTokenOrder.push(best);
       }
 
-      const picked: WordData[] = thslKeywords
-        .map((w) => {
-          const rows = grouped.get(w) ?? [];
-          if (rows.length === 0) return null;
-          if (rows.length === 1) return rows[0];
-          return pickBestRow(w, rows);
-        })
+      // log คำที่ไม่เจอใน DB
+      const foundSet = new Set(tokenWithRole.map((x) => x.word));
+      const notFound = tokens.filter((t) => !foundSet.has(t));
+      if (notFound.length) console.warn("❌ Not found in SL_word:", notFound);
+
+      // 5) เรียงลำดับใหม่ด้วย role จาก DB
+      const orderedTokens = toThslOrderByRole(tokenWithRole);
+
+      // 6) เอา orderedTokens ไป map กลับเป็น row ที่เลือกไว้
+      const rowsByToken = new Map<string, WordData>();
+      pickedRowsInTokenOrder.forEach((r) => rowsByToken.set(normalizeThaiToken(r.word), r));
+
+      const orderedPickedRows: WordData[] = orderedTokens
+        .map((t) => rowsByToken.get(normalizeThaiToken(t)) ?? null)
         .filter(Boolean) as WordData[];
 
-      const processed: ProcessedWordData[] = picked.map((item) => ({
-        word: item.word,
+      const processed: ProcessedWordData[] = orderedPickedRows.map((item) => ({
+        word: normalizeThaiToken(item.word),
         category: item.category,
         pose_filename: item.pose_filename,
         fullUrl: buildPoseUrl(item.pose_filename),
@@ -286,7 +282,7 @@ export default function ResultPage() {
       setCurrentSinglePose(processed.length > 0 ? processed[0].fullUrl : null);
       setLoadingKeywords(false);
 
-      // ✅ call backend concat_video to create mp4 for the whole sentence
+      // 7) concat_video
       try {
         if (processed.length === 0) {
           setLoadingSentenceVideo(false);
@@ -326,14 +322,13 @@ export default function ResultPage() {
       }
     };
 
-    fetchKeywordsFromDB();
+    run();
 
-    // cleanup on unmount
     return () => {
       if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [thslKeywords.join("|")]);
+  }, [JSON.stringify(resultData.keywords || [])]);
 
   const handleDownloadPose = () => {
     if (currentSinglePose) window.open(currentSinglePose, "_blank");
@@ -348,7 +343,7 @@ export default function ResultPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-[#E8D5F0] to-[#FEFBF4] dark:from-[#1a2f44] dark:to-[#0F1F2F] py-8 md:py-12">
+    <div className="min-h-screen bg-gradient-to-b from-[#E8D5F0] to-[#FEFBF4] dark:from-[#1a2f44] dark:to-[#0F1F2F] pt-20 pb-8 md:pt-24 md:pb-12">
       <div className="container mx-auto px-4 max-w-xl">
         <motion.h1
           initial={{ opacity: 0, y: -20 }}
@@ -359,98 +354,136 @@ export default function ResultPage() {
         </motion.h1>
 
         <div className="space-y-4">
+          {/* View Mode Tabs */}
+            <div className="flex gap-2 rounded-xl border-2 border-[#223C55] bg-white/60 p-2">
+              <button
+                type="button"
+                onClick={() => setViewMode("sentence")}
+                className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition-all ${
+                  viewMode === "sentence"
+                    ? "bg-[#0F1F2F] text-white shadow"
+                    : "bg-transparent text-[#263F5D] hover:bg-white/60"
+                }`}
+              >
+                วิดีโอภาษามือ (ทั้งประโยค)
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setViewMode("single")}
+                className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition-all ${
+                  viewMode === "single"
+                    ? "bg-[#0F1F2F] text-white shadow"
+                    : "bg-transparent text-[#263F5D] hover:bg-white/60"
+                }`}
+              >
+                ดูทีละคำ (Pose)
+              </button>
+            </div>
+
           {/* Sentence Video (mp4) */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.05 }}
-            className="border-2 border-[#223C55] dark:border-[#213B54] rounded-xl p-5 bg-[#A6BFE3]"
-          >
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <Video size={18} className="text-[#263F5D]" />
-                <h2 className="font-semibold text-[#263F5D] text-sm">วิดีโอภาษามือ (ทั้งประโยค)</h2>
-              </div>
-            </div>
-
-            <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden mb-4 border border-white/10 shadow-inner">
-              {loadingKeywords || loadingSentenceVideo ? (
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
-                  <RefreshCw className="animate-spin mb-2" />
-                  <span className="text-xs">กำลังสร้างวิดีโอทั้งประโยค...</span>
-                </div>
-              ) : sentenceVideoUrl ? (
-                <video
-                  className="w-full h-full object-contain"
-                  src={sentenceVideoUrl}
-                  controls
-                  playsInline
-                />
-              ) : (
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
-                  <span className="text-3xl mb-2">🚫</span>
-                  <span className="text-xs">สร้างวิดีโอไม่สำเร็จ (เช็ค backend / pose_concat)</span>
-                </div>
-              )}
-            </div>
-
-            <Button
-              disabled={!sentenceVideoUrl}
-              className="w-full bg-[#0F1F2F] hover:bg-[#1a2f44] text-white text-sm disabled:opacity-50 transition-colors"
-              onClick={handleDownloadSentenceVideo}
+          {viewMode === "sentence" && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.05 }}
+              className="border-2 border-[#223C55] dark:border-[#213B54] rounded-xl p-5 bg-[#A6BFE3]"
             >
-              <Download size={16} className="mr-2" />
-              ดาวน์โหลดวิดีโอทั้งประโยค (.mp4)
-            </Button>
-          </motion.div>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Video size={18} className="text-[#263F5D]" />
+                  <h2 className="font-semibold text-[#263F5D] text-sm">
+                    วิดีโอภาษามือ (ทั้งประโยค)
+                  </h2>
+                </div>
+              </div>
+
+              <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden mb-4 border border-white/10 shadow-inner">
+                {loadingKeywords || loadingSentenceVideo ? (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
+                    <RefreshCw className="animate-spin mb-2" />
+                    <span className="text-xs">
+                      กำลังสร้างวิดีโอทั้งประโยค...
+                    </span>
+                  </div>
+                ) : sentenceVideoUrl ? (
+                  <video
+                    className="w-full h-full object-contain"
+                    src={sentenceVideoUrl}
+                    controls
+                    playsInline
+                  />
+                ) : (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
+                    <span className="text-3xl mb-2">🚫</span>
+                    <span className="text-xs">
+                      สร้างวิดีโอไม่สำเร็จ (เช็ค backend / pose_concat)
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <Button
+                disabled={!sentenceVideoUrl}
+                className="w-full bg-[#0F1F2F] hover:bg-[#1a2f44] text-white text-sm disabled:opacity-50 transition-colors"
+                onClick={handleDownloadSentenceVideo}
+              >
+                <Download size={16} className="mr-2" />
+                ดาวน์โหลดวิดีโอทั้งประโยค (.mp4)
+              </Button>
+            </motion.div>
+          )}
 
           {/* Single Pose Preview (PosePlayer) */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="border-2 border-[#223C55] dark:border-[#213B54] rounded-xl p-5 bg-[#A6BFE3]"
-          >
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <Video size={18} className="text-[#263F5D]" />
-                <h2 className="font-semibold text-[#263F5D] text-sm">ดูทีละคำ (Pose)</h2>
-              </div>
-            </div>
-
-            <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden mb-4 border border-white/10 shadow-inner">
-              {loadingKeywords ? (
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
-                  <RefreshCw className="animate-spin mb-2" />
-                  <span className="text-xs">กำลังค้นหาท่าภาษามือ...</span>
-                </div>
-              ) : currentSinglePose ? (
-                <PosePlayer
-                  key={currentSinglePose}
-                  poseUrl={currentSinglePose}
-                  width={640}
-                  height={360}
-                  fps={24}
-                  confThreshold={0.05}
-                  flipY={false}
-                />
-              ) : (
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
-                  <span className="text-3xl mb-2">🚫</span>
-                  <span className="text-xs">ไม่พบไฟล์ท่าทาง หรือยังไม่ได้เลือกคำศัพท์</span>
-                </div>
-              )}
-            </div>
-
-            <Button
-              disabled={!currentSinglePose}
-              className="w-full bg-[#0F1F2F] hover:bg-[#1a2f44] text-white text-sm disabled:opacity-50 transition-colors"
-              onClick={handleDownloadPose}
+          {viewMode === "single" && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 }}
+              className="border-2 border-[#223C55] dark:border-[#213B54] rounded-xl p-5 bg-[#A6BFE3]"
             >
-              <Download size={16} className="mr-2" />
-              ดาวน์โหลดไฟล์ .pose
-            </Button>
-          </motion.div>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Video size={18} className="text-[#263F5D]" />
+                  <h2 className="font-semibold text-[#263F5D] text-sm">ดูทีละคำ</h2>
+                </div>
+              </div>
+
+              <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden mb-4 border border-white/10 shadow-inner">
+                {loadingKeywords ? (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
+                    <RefreshCw className="animate-spin mb-2" />
+                    <span className="text-xs">กำลังค้นหาท่าภาษามือ...</span>
+                  </div>
+                ) : currentSinglePose ? (
+                  <PosePlayer
+                    key={currentSinglePose}
+                    poseUrl={currentSinglePose}
+                    width={640}
+                    height={360}
+                    fps={24}
+                    confThreshold={0.05}
+                    flipY={false}
+                  />
+                ) : (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
+                    <span className="text-3xl mb-2">🚫</span>
+                    <span className="text-xs">ไม่พบไฟล์ท่าทาง หรือยังไม่ได้เลือกคำศัพท์</span>
+                  </div>
+                )}
+              </div>
+              
+              {/* ปุ่มดาวน์โหลดไฟล์ .pose ทีละคำ */}
+              {/* <Button
+                disabled={!currentSinglePose}
+                className="w-full bg-[#0F1F2F] hover:bg-[#1a2f44] text-white text-sm disabled:opacity-50 transition-colors"
+                onClick={handleDownloadPose}
+              >
+                <Download size={16} className="mr-2" />
+                ดาวน์โหลดไฟล์ .pose
+              </Button> */}
+            </motion.div>
+          )}
 
           {/* Text + Summary */}
           <motion.div
@@ -488,7 +521,10 @@ export default function ResultPage() {
                   return (
                     <Badge
                       key={`${item.word}-${idx}`}
-                      onClick={() => setCurrentSinglePose(item.fullUrl)}
+                      onClick={() => {
+                        setCurrentSinglePose(item.fullUrl);
+                        setViewMode("single");
+                      }}
                       className={`cursor-pointer px-3 py-1.5 text-xs transition-all border border-transparent ${
                         isActive
                           ? "bg-[#FEC530] text-[#0F1F2F] scale-105 shadow-md border-white/20"
