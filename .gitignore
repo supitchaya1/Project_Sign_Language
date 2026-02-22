@@ -30,3 +30,31 @@ node_modules/
 backend/poses/
 *.pose
 
+# Dependencies / build
+node_modules/
+dist/
+dist-ssr/
+
+# Env / secrets
+.env
+*.local
+
+# Python venv (สำคัญมาก)
+.venv/
+venv/
+backend/.venv/
+backend/venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Pose files (ถ้าเก็บบน server ไม่เอาขึ้น git)
+backend/poses/
+*.pose
+
+# OS / editor
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/
