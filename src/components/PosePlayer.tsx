@@ -347,7 +347,6 @@ export default function PosePlayer({
       for (let i = 0; i < n; i++) interp[i] = lerpPoint(a[i], b[i], t);
 
       // smooth + hold ลดขาดๆ/กระตุก (ทำให้ดูไม่สั่นด้วย)
-      const alpha = 0.28;
       const prev = smoothPtsRef.current;
       if (!prev || prev.length !== interp.length) {
         smoothPtsRef.current = interp;
@@ -356,18 +355,27 @@ export default function PosePlayer({
           const cur = interp[i];
           const p = prev[i];
 
-          if (cur.c < confThreshold * 0.55 || (cur.x === 0 && cur.y === 0)) {
-            interp[i] = { ...p }; // hold
+          const isHand = i >= 501;               // 501-542 คือมือ
+          const a = isHand ? 0.12 : 0.22;        // ✅ มือช้าลง / ลำตัวพอดีๆ
+
+          const invalid = cur.c < confThreshold * 0.65 || (cur.x === 0 && cur.y === 0);
+
+          if (invalid) {
+            // ✅ hold + ดัน confidence ให้เส้นไม่หาย
+            const held = { ...p, c: Math.max(p.c, confThreshold * 0.95) };
+            prev[i] = held;
+            interp[i] = held;
             continue;
           }
 
-          prev[i] = {
-            x: p.x + (cur.x - p.x) * alpha,
-            y: p.y + (cur.y - p.y) * alpha,
-            z: p.z + (cur.z - p.z) * alpha,
-            c: p.c + (cur.c - p.c) * alpha,
+          const next = {
+            x: p.x + (cur.x - p.x) * a,
+            y: p.y + (cur.y - p.y) * a,
+            z: p.z + (cur.z - p.z) * a,
+            c: p.c + (cur.c - p.c) * a,
           };
-          interp[i] = prev[i];
+          prev[i] = next;
+          interp[i] = next;
         }
       }
 
@@ -422,7 +430,7 @@ export default function PosePlayer({
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
 
-    const thr = threshold * 0.70;
+    const thr = threshold * 0.55;
     for (const [a, b] of edges) {
       const pa = pts[a];
       const pb = pts[b];
