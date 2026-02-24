@@ -356,7 +356,7 @@ export default function PosePlayer({
           const p = prev[i];
 
           const isHand = i >= 501;               // 501-542 คือมือ
-          const a = isHand ? 0.12 : 0.22;        // ✅ มือช้าลง / ลำตัวพอดีๆ
+          const a = isHand ? 0.08 : 0.22;        // ✅ มือช้าลง / ลำตัวพอดีๆ
 
           const invalid = cur.c < confThreshold * 0.65 || (cur.x === 0 && cur.y === 0);
 
