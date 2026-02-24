@@ -33,6 +33,9 @@ interface ResultState {
   originalText?: string;
   summary?: string;
   keywords?: string[];
+
+  // ✅ ของโค้ดอีกชุด: ถ้ามีลำดับ ThSL ที่ fix แล้วจากหน้าก่อน ให้ใช้เลย
+  thsl_fixed?: string;
 }
 
 interface WordData {
@@ -58,9 +61,7 @@ interface CategoryRoleRow {
 // 3) Utils
 // ==========================================
 function normalizeThaiToken(s: string) {
-  return (s ?? "")
-    .replace(/\u200B|\u200C|\u200D|\uFEFF/g, "")
-    .trim();
+  return (s ?? "").replace(/\u200B|\u200C|\u200D|\uFEFF/g, "").trim();
 }
 
 function normalizeThaiText(s: string) {
@@ -125,11 +126,8 @@ function segmentThaiWords(text: string): string[] {
 }
 
 // ✅ ถ้ามีคำรวมอยู่แล้ว ให้ตัดคำย่อยที่เป็น substring ออก (prefer คำยาวกว่า)
-// ตัวอย่าง: มี "โทรศัพท์บ้าน" แล้วตัด "โทรศัพท์", "บ้าน"
 function dropSubTokens(tokens: string[]) {
   const tks = uniqPreserveOrder(tokens.map(normalizeThaiToken).filter(Boolean));
-
-  // เรียงยาวก่อน เพื่อให้เก็บคำรวมก่อน
   const sorted = tks.slice().sort((a, b) => b.length - a.length);
 
   const kept: string[] = [];
@@ -138,7 +136,6 @@ function dropSubTokens(tokens: string[]) {
     if (!isSub) kept.push(t);
   }
 
-  // คืนลำดับเดิม
   const keptSet = new Set(kept);
   return tks.filter((t) => keptSet.has(t));
 }
@@ -248,6 +245,7 @@ export default function ResultPage() {
     text: state?.originalText || "ไม่มีข้อความ",
     summary: state?.summary || "ไม่มีข้อมูลสรุป",
     keywords: state?.keywords || [],
+    thsl_fixed: state?.thsl_fixed || "",
   };
 
   const setNewBlobUrl = (url: string | null) => {
@@ -260,21 +258,38 @@ export default function ResultPage() {
   };
 
   useEffect(() => {
+    let cancelled = false;
+    const abort = new AbortController();
+
     const run = async () => {
+      // ------------------------------------------
+      // A) เตรียม tokens (ใช้ thsl_fixed ก่อนถ้ามี)
+      // ------------------------------------------
       const kwTokens = cleanTokens(resultData.keywords || []);
 
-      if (kwTokens.length === 0) {
+      // ✅ ถ้ามี thsl_fixed (ลำดับ ThSL ที่ fix แล้ว) ให้ใช้เลย
+      const fixedTokens = resultData.thsl_fixed?.trim()
+        ? cleanTokens(resultData.thsl_fixed.trim().split(/\s+/))
+        : [];
+
+      if (fixedTokens.length === 0 && kwTokens.length === 0) {
+        if (cancelled) return;
         setFoundWords([]);
         setCurrentSinglePose(null);
         setNewBlobUrl(null);
+        setLoadingKeywords(false);
+        setLoadingSentenceVideo(false);
         return;
       }
 
+      if (cancelled) return;
       setLoadingKeywords(true);
       setLoadingSentenceVideo(true);
       setNewBlobUrl(null);
 
-      // 1) โหลด mapping category -> role, priority
+      // ------------------------------------------
+      // B) โหลด mapping category -> role, priority
+      // ------------------------------------------
       const { data: mapData, error: mapErr } = await supabase
         .from("sl_category_role")
         .select("category, role, priority");
@@ -294,97 +309,181 @@ export default function ResultPage() {
         return roleMap.get(key) ?? { role: "O", priority: 999 };
       };
 
-      // ✅ 2) เติม “คำสำคัญจากข้อความต้นฉบับ” แบบไม่ hardcode (S/V/O/NEG/PP/Adv/Q ฯลฯ)
-      const textTokens = uniqPreserveOrder(segmentThaiWords(resultData.text));
-      const candidateTextTokens = textTokens.slice(0, 200);
+      // ------------------------------------------
+      // C) สร้าง tokens ที่จะเอาไป query SL_word
+      //    - ถ้ามี fixedTokens -> ใช้ fixedTokens เป็น order หลัก
+      //    - ถ้าไม่มี -> สร้างจาก keywords + extraFromText แล้ว apply rule
+      // ------------------------------------------
+      let finalOrderedTokens: string[] = [];
 
-      let extraFromText: string[] = [];
+      if (fixedTokens.length > 0) {
+        // ✅ ใช้ fixed เป็นลำดับสุดท้ายเลย
+        finalOrderedTokens = dropSubTokens(uniqPreserveOrder(fixedTokens));
+      } else {
+        // ✅ เติม “คำสำคัญจากข้อความต้นฉบับ” แบบไม่ hardcode
+        const textTokens = uniqPreserveOrder(segmentThaiWords(resultData.text));
+        const candidateTextTokens = textTokens.slice(0, 200);
 
-      const IMPORTANT_ROLES = new Set<RuleRole>([
-        "S",
-        "V",
-        "O",
-        "NEG",
-        "PP(Place)",
-        "Adv(Time)",
-        "When/Why/Where/How(?)",
-        "What(?)",
-        "Who(?)",
-        "Whose(?)",
-        "Q(?)",
-        "Pronoun",
-        "V2B",
-        "ClausalVerb",
-        "Adj",
-        "Adj1",
-        "Adj2",
-        "NP",
-        "PAdj",
-        "ComparativeAdj",
-        "Money",
-        "Number",
-        "Currency",
-        "Age",
-        "Year",
-        "Break",
-      ]);
+        let extraFromText: string[] = [];
 
-      if (candidateTextTokens.length > 0) {
-        const { data: textRows, error: textErr } = await supabase
-          .from("SL_word")
-          .select("word, category, pose_filename")
-          .in("word", candidateTextTokens);
+        const IMPORTANT_ROLES = new Set<RuleRole>([
+          "S",
+          "V",
+          "O",
+          "NEG",
+          "PP(Place)",
+          "Adv(Time)",
+          "When/Why/Where/How(?)",
+          "What(?)",
+          "Who(?)",
+          "Whose(?)",
+          "Q(?)",
+          "Pronoun",
+          "V2B",
+          "ClausalVerb",
+          "Adj",
+          "Adj1",
+          "Adj2",
+          "NP",
+          "PAdj",
+          "ComparativeAdj",
+          "Money",
+          "Number",
+          "Currency",
+          "Age",
+          "Year",
+          "Break",
+        ]);
 
-        if (textErr) {
-          console.warn("⚠️ Cannot load SL_word for originalText tokens:", textErr);
-        } else {
-          const rows = (textRows as WordData[]) || [];
+        if (candidateTextTokens.length > 0) {
+          const { data: textRows, error: textErr } = await supabase
+            .from("SL_word")
+            .select("word, category, pose_filename")
+            .in("word", candidateTextTokens);
 
-          // เก็บ token ที่ role สำคัญ (ตามลำดับที่พบในข้อความ)
-          const seen = new Set<string>();
-          for (const tok of candidateTextTokens) {
-            const normTok = normalizeThaiToken(tok);
-            if (!normTok || seen.has(normTok)) continue;
+          if (textErr) {
+            console.warn("⚠️ Cannot load SL_word for originalText tokens:", textErr);
+          } else {
+            const rows = (textRows as WordData[]) || [];
+            const seen = new Set<string>();
 
-            const candidates = rows.filter(
-              (r) => normalizeThaiToken(r.word) === normTok
-            );
-            if (candidates.length === 0) continue;
+            for (const tok of candidateTextTokens) {
+              const normTok = normalizeThaiToken(tok);
+              if (!normTok || seen.has(normTok)) continue;
 
-            // เลือก candidate ที่ priority ดีสุด (อิง DB)
-            const best = candidates
-              .slice()
-              .sort(
-                (a, b) => getRole(a.category).priority - getRole(b.category).priority
-              )[0];
+              const candidates = rows.filter(
+                (r) => normalizeThaiToken(r.word) === normTok
+              );
+              if (candidates.length === 0) continue;
 
-            const role = getRole(best.category).role;
-            if (IMPORTANT_ROLES.has(role)) {
-              extraFromText.push(normTok);
-              seen.add(normTok);
+              const best = candidates
+                .slice()
+                .sort(
+                  (a, b) => getRole(a.category).priority - getRole(b.category).priority
+                )[0];
+
+              const role = getRole(best.category).role;
+              if (IMPORTANT_ROLES.has(role)) {
+                extraFromText.push(normTok);
+                seen.add(normTok);
+              }
             }
           }
         }
+
+        // รวม tokens: keywords + extraFromText
+        const mergedTokens = uniqPreserveOrder([...kwTokens, ...extraFromText]);
+
+        // ตัดคำย่อยเมื่อมีคำรวม
+        const mergedNoSub = dropSubTokens(mergedTokens);
+
+        // จัด Thai order ก่อนเพื่อ match ฝั่ง Thai pattern
+        const tokensThai = orderTokensByOriginalText(resultData.text, mergedNoSub);
+
+        // query SL_word เฉพาะคำที่ต้องใช้
+        const unique = Array.from(new Set(tokensThai));
+        const { data, error } = await supabase
+          .from("SL_word")
+          .select("word, category, pose_filename")
+          .in("word", unique);
+
+        if (error) {
+          console.error("Fetch SL_word error:", error);
+          if (cancelled) return;
+          setFoundWords([]);
+          setCurrentSinglePose(null);
+          setLoadingKeywords(false);
+          setLoadingSentenceVideo(false);
+          return;
+        }
+
+        const raw = (data as WordData[]) || [];
+        const grouped = new Map<string, WordData[]>();
+        raw.forEach((row) => {
+          const w = normalizeThaiToken(row.word);
+          if (!grouped.has(w)) grouped.set(w, []);
+          grouped.get(w)!.push(row);
+        });
+
+        const pickBestRow = (token: string, rows: WordData[]) => {
+          const t = normalizeThaiToken(token);
+          return rows
+            .slice()
+            .sort((a, b) => {
+              const ra = getRole(a.category);
+              const rb = getRole(b.category);
+
+              const boostA =
+                isNumberToken(t) && (a.category === "ตัวเลข" || a.category === "จำนวน")
+                  ? -1000
+                  : 0;
+              const boostB =
+                isNumberToken(t) && (b.category === "ตัวเลข" || b.category === "จำนวน")
+                  ? -1000
+                  : 0;
+
+              return ra.priority + boostA - (rb.priority + boostB);
+            })[0];
+        };
+
+        // สร้าง tagged tokens (ตาม Thai order)
+        const tagged: { word: string; role: RuleRole | "UNK" }[] = [];
+        const pickedRowsInThaiOrder: WordData[] = [];
+
+        for (const t of tokensThai) {
+          const rows = grouped.get(t) ?? [];
+          if (rows.length === 0) continue;
+
+          const best = rows.length === 1 ? rows[0] : pickBestRow(t, rows);
+          const r = getRole(best.category);
+
+          tagged.push({ word: t, role: r.role });
+          pickedRowsInThaiOrder.push(best);
+        }
+
+        // match rule Table 1–40
+        const rule = findExactRule(tagged);
+
+        // reorder ตาม rule ถ้ามี ไม่งั้น fallback Thai order
+        finalOrderedTokens = rule
+          ? reorderByRule(tagged, rule.thslOrder)
+          : tagged.map((t) => t.word);
+
+        // เราจะใช้ finalOrderedTokens ต่อในการทำ processed โดย query ซ้ำด้านล่าง
       }
 
-      // ✅ 3) รวม tokens: keywords + extraFromText
-      const mergedTokens = uniqPreserveOrder([...kwTokens, ...extraFromText]);
-
-      // ✅ 3.1) ตัดคำย่อยเมื่อมีคำรวม (แก้ปัญหา โทรศัพท์บ้าน + โทรศัพท์ + บ้าน)
-      const mergedNoSub = dropSubTokens(mergedTokens);
-
-      // ✅ 3.2) จัด Thai order ก่อน เพื่อ match pattern ฝั่ง "Thai"
-      const tokensThai = orderTokensByOriginalText(resultData.text, mergedNoSub);
-
-      // 4) query SL_word เฉพาะคำที่ต้องใช้
-      const unique = Array.from(new Set(tokensThai));
-      const { data, error } = await supabase
+      // ------------------------------------------
+      // D) Query SL_word ตาม finalOrderedTokens แล้วสร้าง processed
+      // ------------------------------------------
+      const uniqueFinal = Array.from(new Set(finalOrderedTokens));
+      const { data: dataFinal, error: errFinal } = await supabase
         .from("SL_word")
         .select("word, category, pose_filename")
-        .in("word", unique);
+        .in("word", uniqueFinal);
 
-      if (error) {
-        console.error("Fetch SL_word error:", error);
+      if (errFinal) {
+        console.error("Fetch SL_word (final) error:", errFinal);
+        if (cancelled) return;
         setFoundWords([]);
         setCurrentSinglePose(null);
         setLoadingKeywords(false);
@@ -392,18 +491,18 @@ export default function ResultPage() {
         return;
       }
 
-      const raw = (data as WordData[]) || [];
+      const rawFinal = (dataFinal as WordData[]) || [];
 
       // group: word -> rows[]
-      const grouped = new Map<string, WordData[]>();
-      raw.forEach((row) => {
+      const groupedFinal = new Map<string, WordData[]>();
+      rawFinal.forEach((row) => {
         const w = normalizeThaiToken(row.word);
-        if (!grouped.has(w)) grouped.set(w, []);
-        grouped.get(w)!.push(row);
+        if (!groupedFinal.has(w)) groupedFinal.set(w, []);
+        groupedFinal.get(w)!.push(row);
       });
 
-      // เลือก pose ที่ดีที่สุด ต่อ token ตาม priority (ไม่ hardcode)
-      const pickBestRow = (token: string, rows: WordData[]) => {
+      // เลือก pose ที่ดีที่สุดต่อ token ตาม priority
+      const pickBestRowFinal = (token: string, rows: WordData[]) => {
         const t = normalizeThaiToken(token);
         return rows
           .slice()
@@ -411,7 +510,6 @@ export default function ResultPage() {
             const ra = getRole(a.category);
             const rb = getRole(b.category);
 
-            // ถ้า token เป็นตัวเลข ให้ boost หมวดตัวเลข/จำนวน
             const boostA =
               isNumberToken(t) && (a.category === "ตัวเลข" || a.category === "จำนวน")
                 ? -1000
@@ -425,39 +523,13 @@ export default function ResultPage() {
           })[0];
       };
 
-      // 5) สร้าง tagged tokens (ตาม Thai order)
-      const tagged: { word: string; role: RuleRole | "UNK" }[] = [];
-      const pickedRowsInThaiOrder: WordData[] = [];
-
-      for (const t of tokensThai) {
-        const rows = grouped.get(t) ?? [];
+      const orderedPickedRows: WordData[] = [];
+      for (const tok of finalOrderedTokens) {
+        const rows = groupedFinal.get(normalizeThaiToken(tok)) ?? [];
         if (rows.length === 0) continue;
-
-        const best = rows.length === 1 ? rows[0] : pickBestRow(t, rows);
-        const r = getRole(best.category);
-
-        tagged.push({ word: t, role: r.role });
-        pickedRowsInThaiOrder.push(best);
+        const best = rows.length === 1 ? rows[0] : pickBestRowFinal(tok, rows);
+        orderedPickedRows.push(best);
       }
-
-      // token->row
-      const rowsByToken = new Map<string, WordData>();
-      pickedRowsInThaiOrder.forEach((r) =>
-        rowsByToken.set(normalizeThaiToken(r.word), r)
-      );
-
-      // 6) match rule Table 1–40
-      const rule = findExactRule(tagged);
-
-      // 7) reorder ตาม rule ถ้ามี ไม่งั้น fallback Thai order
-      const orderedTokens = rule
-        ? reorderByRule(tagged, rule.thslOrder)
-        : tagged.map((t) => t.word);
-
-      // 8) map orderedTokens -> processed
-      const orderedPickedRows: WordData[] = orderedTokens
-        .map((t) => rowsByToken.get(normalizeThaiToken(t)) ?? null)
-        .filter(Boolean) as WordData[];
 
       const processed: ProcessedWordData[] = orderedPickedRows.map((item) => ({
         word: normalizeThaiToken(item.word),
@@ -466,17 +538,21 @@ export default function ResultPage() {
         fullUrl: buildPoseUrl(item.pose_filename),
       }));
 
+      if (cancelled) return;
       setFoundWords(processed);
       setCurrentSinglePose(processed.length > 0 ? processed[0].fullUrl : null);
       setLoadingKeywords(false);
 
-      // 9) concat_video
+      // ------------------------------------------
+      // E) concat_video (เรียก backend รวมท่าเป็น mp4)
+      // ------------------------------------------
       try {
         const filenames = processed
           .map((x) => (x.pose_filename ?? "").trim())
           .filter(Boolean);
 
         if (filenames.length === 0) {
+          if (cancelled) return;
           setLoadingSentenceVideo(false);
           setNewBlobUrl(null);
           return;
@@ -489,11 +565,13 @@ export default function ResultPage() {
             pose_filenames: filenames,
             output_name: "sentence.mp4",
           }),
+          signal: abort.signal,
         });
 
         if (!resp.ok) {
           const text = await resp.text();
           console.error("concat_video failed:", resp.status, text);
+          if (cancelled) return;
           setLoadingSentenceVideo(false);
           setNewBlobUrl(null);
           return;
@@ -501,10 +579,18 @@ export default function ResultPage() {
 
         const blob = await resp.blob();
         const url = URL.createObjectURL(blob);
+
+        if (cancelled) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+
         setNewBlobUrl(url);
         setLoadingSentenceVideo(false);
-      } catch (e) {
+      } catch (e: any) {
+        if (e?.name === "AbortError") return;
         console.error("concat_video error:", e);
+        if (cancelled) return;
         setLoadingSentenceVideo(false);
         setNewBlobUrl(null);
       }
@@ -513,10 +599,12 @@ export default function ResultPage() {
     run();
 
     return () => {
+      cancelled = true;
+      abort.abort();
       if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(resultData.keywords || []), resultData.text]);
+  }, [JSON.stringify(resultData.keywords || []), resultData.text, resultData.thsl_fixed]);
 
   const handleDownloadSentenceVideo = () => {
     if (!sentenceVideoUrl) return;

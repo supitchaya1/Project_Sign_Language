@@ -11,8 +11,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { supabase } from '@/integrations/supabase/client';
-
+// import { supabase } from '@/integrations/supabase/client';
+import { supabase } from "@/lib/supabase";
 declare namespace Intl {
   interface SegmentData {
     segment: string;
@@ -299,31 +299,37 @@ export default function TranslatePage() {
     toast.info('กำลังสรุปข้อความด้วย TYPHOON AI...');
     
     try {
-      const { data, error } = await supabase.functions.invoke('summarize-text', {
-        body: { text: text.trim() }
+      const { data, error } = await supabase.functions.invoke("summarize-text", {
+        body: { text: text.trim() },
       });
 
       if (error) {
-        console.error('Summarize error:', error);
-        throw new Error(error.message || 'Failed to summarize text');
+        console.error("Summarize error:", error);
+        throw new Error(error.message || "Failed to summarize text");
       }
 
       if (data?.error) {
-        console.error('API error:', data.error);
+        console.error("API error:", data.error);
         throw new Error(data.error);
       }
 
-      // Navigate to result page with data
-      navigate('/result', { 
-        state: { 
+      // ✅ บังคับ “เฉพาะประโยคที่มีใน DB เท่านั้น”
+      if (!data?.found) {
+        setShowSummarizeErrorModal(true);
+        return; // ✅ ไม่ไปหน้า result
+      }
+
+      navigate("/result", {
+        state: {
           originalText: text.trim(),
-          summary: data.summary,
-          keywords: data.keywords 
-        } 
+          summary: data.summary,         // ✅ ประโยคไทยจาก DB
+          thsl_fixed: data.thsl_fixed,   // ✅ ส่งไปใช้ต่อ
+          keywords: data.keywords ?? [],
+        },
       });
     } catch (error) {
-      console.error('Error summarizing:', error);
-      toast.error('สร้างสรุปไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+      console.error("Error summarizing:", error);
+      toast.error("สร้างสรุปไม่สำเร็จ กรุณาลองใหม่อีกครั้ง");
       setShowSummarizeErrorModal(true);
     } finally {
       setIsSubmitting(false);
