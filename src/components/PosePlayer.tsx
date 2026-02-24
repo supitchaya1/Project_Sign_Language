@@ -597,7 +597,7 @@ export default function PosePlayer({
       const dxRaw = poseWrist.x - handWrist.x;
       const dyRaw = poseWrist.y - handWrist.y;
 
-      const a = 0.22;
+      const a = 0.12;
       const prevA = handAnchorRef.current[side];
       prevA.dx += (dxRaw - prevA.dx) * a;
       prevA.dy += (dyRaw - prevA.dy) * a;
