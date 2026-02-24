@@ -759,7 +759,9 @@ export default function ResultPage() {
 
             <div className="border-2 border-[#223C55] dark:border-[#213B54] rounded-xl p-5 bg-[#A6BFE3]">
               <h2 className="font-semibold text-[#263F5D] mb-2 text-sm">สรุปใจความ</h2>
-              <p className="text-[#263F5D] leading-relaxed text-sm">{resultData.summary}</p>
+              <p className="text-[#263F5D] leading-relaxed text-sm">
+                {(resultData.summary ?? "").replace(/\s+/g, "")}
+              </p>
             </div>
           </motion.div>
 
