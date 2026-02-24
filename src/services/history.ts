@@ -1,6 +1,6 @@
-import { supabase } from '@/lib/supabase';
+import { supabase } from "@/lib/supabase";
 
-export const NOT_LOGGED_IN = 'NOT_LOGGED_IN';
+export const NOT_LOGGED_IN = "NOT_LOGGED_IN";
 
 export interface HistoryRecord {
   id: string;
@@ -26,7 +26,7 @@ export async function saveHistory({
 }) {
   const user = await requireUser();
   const { data, error } = await supabase
-    .from('translation_history')
+    .from("translation_history")
     .insert({
       user_id: user.id,
       input_text,
@@ -42,11 +42,26 @@ export async function saveHistory({
 export async function fetchMyHistory() {
   const user = await requireUser();
   const { data, error } = await supabase
-    .from('translation_history')
-    .select('id, input_text, translated_result, created_at, user_id')
-    .eq('user_id', user.id)
-    .order('created_at', { ascending: false });
+    .from("translation_history")
+    .select("id, input_text, translated_result, created_at, user_id")
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: false });
 
   if (error) throw error;
   return (data ?? []) as HistoryRecord[];
+}
+
+/**
+ * ✅ ลบประวัติ 1 รายการ (ลบได้เฉพาะของตัวเอง)
+ */
+export async function deleteHistory(id: string) {
+  const user = await requireUser();
+
+  const { error } = await supabase
+    .from("translation_history")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", user.id);
+
+  if (error) throw error;
 }

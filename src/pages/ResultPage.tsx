@@ -6,8 +6,10 @@ import { Badge } from "@/components/ui/badge";
 import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
 import PosePlayer from "@/components/PosePlayer";
+import { toast } from "sonner";
 
 import { THSL_RULES, Role as RuleRole, ThslRule } from "@/services/thslRules";
+import { saveHistory } from "@/services/history";
 
 // ==========================================
 // 1) Backend URL + buildPoseUrl
@@ -33,8 +35,6 @@ interface ResultState {
   originalText?: string;
   summary?: string;
   keywords?: string[];
-
-  // ✅ ของโค้ดอีกชุด: ถ้ามีลำดับ ThSL ที่ fix แล้วจากหน้าก่อน ให้ใช้เลย
   thsl_fixed?: string;
 }
 
@@ -53,7 +53,7 @@ interface ProcessedWordData {
 
 interface CategoryRoleRow {
   category: string;
-  role: string; // role จาก DB
+  role: string;
   priority: number;
 }
 
@@ -89,7 +89,6 @@ function isNumberToken(token: string) {
   return /^[0-9]+$/.test(token);
 }
 
-// ✅ เรียง tokens ตามตำแหน่งที่พบในข้อความต้นฉบับ (Thai order)
 function orderTokensByOriginalText(originalText: string, tokens: string[]) {
   const text = normalizeThaiText(originalText);
   return (tokens || [])
@@ -103,7 +102,6 @@ function orderTokensByOriginalText(originalText: string, tokens: string[]) {
     .filter(Boolean);
 }
 
-// ✅ ตัดคำจาก originalText (รองรับ "คุณดูโทรทัศน์" ไม่มีเว้นวรรค)
 function segmentThaiWords(text: string): string[] {
   const s = normalizeThaiText(text).trim();
   if (!s) return [];
@@ -121,11 +119,9 @@ function segmentThaiWords(text: string): string[] {
     return out;
   }
 
-  // fallback ถ้าไม่มี Segmenter
   return s.split(/\s+/).map(normalizeThaiToken).filter(Boolean);
 }
 
-// ✅ ถ้ามีคำรวมอยู่แล้ว ให้ตัดคำย่อยที่เป็น substring ออก (prefer คำยาวกว่า)
 function dropSubTokens(tokens: string[]) {
   const tks = uniqPreserveOrder(tokens.map(normalizeThaiToken).filter(Boolean));
   const sorted = tks.slice().sort((a, b) => b.length - a.length);
@@ -141,17 +137,14 @@ function dropSubTokens(tokens: string[]) {
 }
 
 // ==========================================
-// 4) Rule engine (Table 1–40)
+// 4) Rule engine
 // ==========================================
 function normalizeDbRoleToRuleRole(dbRole: string): RuleRole {
   const r = (dbRole ?? "").trim();
-
-  // รองรับ DB เก่า/สั้น
   if (r === "Q") return "Q(?)";
   if (r === "What") return "What(?)";
   if (r === "Who") return "Who(?)";
   if (r === "Whose") return "Whose(?)";
-
   return r as RuleRole;
 }
 
@@ -184,7 +177,6 @@ function reorderByRule(
   const out: string[] = [];
 
   for (const role of thslOrder) {
-    // special case Age/Year (rule 27)
     if ((role as any) === "Age/Year") {
       const idxAge = tagged.findIndex(
         (t, i) => !used.has(i) && t.role === ("Age" as any)
@@ -212,7 +204,6 @@ function reorderByRule(
     }
   }
 
-  // เติมคำที่เหลือท้ายสุด
   tagged.forEach((t, i) => {
     if (!used.has(i)) out.push(t.word);
   });
@@ -248,6 +239,36 @@ export default function ResultPage() {
     thsl_fixed: state?.thsl_fixed || "",
   };
 
+  // ✅ กันการบันทึกซ้ำตอน re-render
+  const savedOnceRef = useRef(false);
+
+  // ✅ บันทึกประวัติลง Supabase (ทำครั้งเดียว)
+  useEffect(() => {
+    if (savedOnceRef.current) return;
+
+    const inputText = (resultData.text ?? "").trim();
+    const translated = (resultData.summary ?? "").trim();
+
+    if (!inputText || inputText === "ไม่มีข้อความ") return;
+    if (!translated || translated === "ไม่มีข้อมูลสรุป") return;
+
+    savedOnceRef.current = true;
+
+    (async () => {
+      try {
+        await saveHistory({
+          input_text: inputText,
+          translated_result: translated,
+        });
+      } catch (e) {
+        // ไม่ทำให้หน้า result พัง แค่แจ้งเตือนเบาๆ
+        console.warn("saveHistory failed:", e);
+        toast.warning("บันทึกประวัติไม่สำเร็จ (ตรวจสอบการล็อกอิน / RLS)");
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const setNewBlobUrl = (url: string | null) => {
     if (prevBlobUrl.current) {
       URL.revokeObjectURL(prevBlobUrl.current);
@@ -262,12 +283,7 @@ export default function ResultPage() {
     const abort = new AbortController();
 
     const run = async () => {
-      // ------------------------------------------
-      // A) เตรียม tokens (ใช้ thsl_fixed ก่อนถ้ามี)
-      // ------------------------------------------
       const kwTokens = cleanTokens(resultData.keywords || []);
-
-      // ✅ ถ้ามี thsl_fixed (ลำดับ ThSL ที่ fix แล้ว) ให้ใช้เลย
       const fixedTokens = resultData.thsl_fixed?.trim()
         ? cleanTokens(resultData.thsl_fixed.trim().split(/\s+/))
         : [];
@@ -287,9 +303,6 @@ export default function ResultPage() {
       setLoadingSentenceVideo(true);
       setNewBlobUrl(null);
 
-      // ------------------------------------------
-      // B) โหลด mapping category -> role, priority
-      // ------------------------------------------
       const { data: mapData, error: mapErr } = await supabase
         .from("sl_category_role")
         .select("category, role, priority");
@@ -309,50 +322,21 @@ export default function ResultPage() {
         return roleMap.get(key) ?? { role: "O", priority: 999 };
       };
 
-      // ------------------------------------------
-      // C) สร้าง tokens ที่จะเอาไป query SL_word
-      //    - ถ้ามี fixedTokens -> ใช้ fixedTokens เป็น order หลัก
-      //    - ถ้าไม่มี -> สร้างจาก keywords + extraFromText แล้ว apply rule
-      // ------------------------------------------
       let finalOrderedTokens: string[] = [];
 
       if (fixedTokens.length > 0) {
-        // ✅ ใช้ fixed เป็นลำดับสุดท้ายเลย
         finalOrderedTokens = dropSubTokens(uniqPreserveOrder(fixedTokens));
       } else {
-        // ✅ เติม “คำสำคัญจากข้อความต้นฉบับ” แบบไม่ hardcode
         const textTokens = uniqPreserveOrder(segmentThaiWords(resultData.text));
         const candidateTextTokens = textTokens.slice(0, 200);
 
         let extraFromText: string[] = [];
 
         const IMPORTANT_ROLES = new Set<RuleRole>([
-          "S",
-          "V",
-          "O",
-          "NEG",
-          "PP(Place)",
-          "Adv(Time)",
-          "When/Why/Where/How(?)",
-          "What(?)",
-          "Who(?)",
-          "Whose(?)",
-          "Q(?)",
-          "Pronoun",
-          "V2B",
-          "ClausalVerb",
-          "Adj",
-          "Adj1",
-          "Adj2",
-          "NP",
-          "PAdj",
-          "ComparativeAdj",
-          "Money",
-          "Number",
-          "Currency",
-          "Age",
-          "Year",
-          "Break",
+          "S","V","O","NEG","PP(Place)","Adv(Time)",
+          "When/Why/Where/How(?)","What(?)","Who(?)","Whose(?)","Q(?)",
+          "Pronoun","V2B","ClausalVerb","Adj","Adj1","Adj2","NP","PAdj","ComparativeAdj",
+          "Money","Number","Currency","Age","Year","Break",
         ]);
 
         if (candidateTextTokens.length > 0) {
@@ -371,16 +355,12 @@ export default function ResultPage() {
               const normTok = normalizeThaiToken(tok);
               if (!normTok || seen.has(normTok)) continue;
 
-              const candidates = rows.filter(
-                (r) => normalizeThaiToken(r.word) === normTok
-              );
+              const candidates = rows.filter((r) => normalizeThaiToken(r.word) === normTok);
               if (candidates.length === 0) continue;
 
               const best = candidates
                 .slice()
-                .sort(
-                  (a, b) => getRole(a.category).priority - getRole(b.category).priority
-                )[0];
+                .sort((a, b) => getRole(a.category).priority - getRole(b.category).priority)[0];
 
               const role = getRole(best.category).role;
               if (IMPORTANT_ROLES.has(role)) {
@@ -391,16 +371,10 @@ export default function ResultPage() {
           }
         }
 
-        // รวม tokens: keywords + extraFromText
         const mergedTokens = uniqPreserveOrder([...kwTokens, ...extraFromText]);
-
-        // ตัดคำย่อยเมื่อมีคำรวม
         const mergedNoSub = dropSubTokens(mergedTokens);
-
-        // จัด Thai order ก่อนเพื่อ match ฝั่ง Thai pattern
         const tokensThai = orderTokensByOriginalText(resultData.text, mergedNoSub);
 
-        // query SL_word เฉพาะคำที่ต้องใช้
         const unique = Array.from(new Set(tokensThai));
         const { data, error } = await supabase
           .from("SL_word")
@@ -434,21 +408,15 @@ export default function ResultPage() {
               const rb = getRole(b.category);
 
               const boostA =
-                isNumberToken(t) && (a.category === "ตัวเลข" || a.category === "จำนวน")
-                  ? -1000
-                  : 0;
+                isNumberToken(t) && (a.category === "ตัวเลข" || a.category === "จำนวน") ? -1000 : 0;
               const boostB =
-                isNumberToken(t) && (b.category === "ตัวเลข" || b.category === "จำนวน")
-                  ? -1000
-                  : 0;
+                isNumberToken(t) && (b.category === "ตัวเลข" || b.category === "จำนวน") ? -1000 : 0;
 
               return ra.priority + boostA - (rb.priority + boostB);
             })[0];
         };
 
-        // สร้าง tagged tokens (ตาม Thai order)
         const tagged: { word: string; role: RuleRole | "UNK" }[] = [];
-        const pickedRowsInThaiOrder: WordData[] = [];
 
         for (const t of tokensThai) {
           const rows = grouped.get(t) ?? [];
@@ -456,25 +424,13 @@ export default function ResultPage() {
 
           const best = rows.length === 1 ? rows[0] : pickBestRow(t, rows);
           const r = getRole(best.category);
-
           tagged.push({ word: t, role: r.role });
-          pickedRowsInThaiOrder.push(best);
         }
 
-        // match rule Table 1–40
         const rule = findExactRule(tagged);
-
-        // reorder ตาม rule ถ้ามี ไม่งั้น fallback Thai order
-        finalOrderedTokens = rule
-          ? reorderByRule(tagged, rule.thslOrder)
-          : tagged.map((t) => t.word);
-
-        // เราจะใช้ finalOrderedTokens ต่อในการทำ processed โดย query ซ้ำด้านล่าง
+        finalOrderedTokens = rule ? reorderByRule(tagged, rule.thslOrder) : tagged.map((t) => t.word);
       }
 
-      // ------------------------------------------
-      // D) Query SL_word ตาม finalOrderedTokens แล้วสร้าง processed
-      // ------------------------------------------
       const uniqueFinal = Array.from(new Set(finalOrderedTokens));
       const { data: dataFinal, error: errFinal } = await supabase
         .from("SL_word")
@@ -492,8 +448,6 @@ export default function ResultPage() {
       }
 
       const rawFinal = (dataFinal as WordData[]) || [];
-
-      // group: word -> rows[]
       const groupedFinal = new Map<string, WordData[]>();
       rawFinal.forEach((row) => {
         const w = normalizeThaiToken(row.word);
@@ -501,7 +455,6 @@ export default function ResultPage() {
         groupedFinal.get(w)!.push(row);
       });
 
-      // เลือก pose ที่ดีที่สุดต่อ token ตาม priority
       const pickBestRowFinal = (token: string, rows: WordData[]) => {
         const t = normalizeThaiToken(token);
         return rows
@@ -511,13 +464,9 @@ export default function ResultPage() {
             const rb = getRole(b.category);
 
             const boostA =
-              isNumberToken(t) && (a.category === "ตัวเลข" || a.category === "จำนวน")
-                ? -1000
-                : 0;
+              isNumberToken(t) && (a.category === "ตัวเลข" || a.category === "จำนวน") ? -1000 : 0;
             const boostB =
-              isNumberToken(t) && (b.category === "ตัวเลข" || b.category === "จำนวน")
-                ? -1000
-                : 0;
+              isNumberToken(t) && (b.category === "ตัวเลข" || b.category === "จำนวน") ? -1000 : 0;
 
             return ra.priority + boostA - (rb.priority + boostB);
           })[0];
@@ -543,13 +492,8 @@ export default function ResultPage() {
       setCurrentSinglePose(processed.length > 0 ? processed[0].fullUrl : null);
       setLoadingKeywords(false);
 
-      // ------------------------------------------
-      // E) concat_video (เรียก backend รวมท่าเป็น mp4)
-      // ------------------------------------------
       try {
-        const filenames = processed
-          .map((x) => (x.pose_filename ?? "").trim())
-          .filter(Boolean);
+        const filenames = processed.map((x) => (x.pose_filename ?? "").trim()).filter(Boolean);
 
         if (filenames.length === 0) {
           if (cancelled) return;
@@ -561,10 +505,7 @@ export default function ResultPage() {
         const resp = await fetch(joinUrl(BACKEND_URL, "api/concat_video"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            pose_filenames: filenames,
-            output_name: "sentence.mp4",
-          }),
+          body: JSON.stringify({ pose_filenames: filenames, output_name: "sentence.mp4" }),
           signal: abort.signal,
         });
 
@@ -626,7 +567,6 @@ export default function ResultPage() {
         </motion.h1>
 
         <div className="space-y-4">
-          {/* View Mode Tabs */}
           <div className="flex gap-2 rounded-xl border-2 border-[#223C55] bg-white/60 p-2">
             <button
               type="button"
@@ -653,7 +593,6 @@ export default function ResultPage() {
             </button>
           </div>
 
-          {/* Sentence Video */}
           {viewMode === "sentence" && (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -677,18 +616,11 @@ export default function ResultPage() {
                     <span className="text-xs">กำลังสร้างวิดีโอทั้งประโยค...</span>
                   </div>
                 ) : sentenceVideoUrl ? (
-                  <video
-                    className="w-full h-full object-contain"
-                    src={sentenceVideoUrl}
-                    controls
-                    playsInline
-                  />
+                  <video className="w-full h-full object-contain" src={sentenceVideoUrl} controls playsInline />
                 ) : (
                   <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
                     <span className="text-3xl mb-2">🚫</span>
-                    <span className="text-xs">
-                      สร้างวิดีโอไม่สำเร็จ (เช็ค backend / pose_concat)
-                    </span>
+                    <span className="text-xs">สร้างวิดีโอไม่สำเร็จ (เช็ค backend / pose_concat)</span>
                   </div>
                 )}
               </div>
@@ -704,7 +636,6 @@ export default function ResultPage() {
             </motion.div>
           )}
 
-          {/* Single Pose */}
           {viewMode === "single" && (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -745,7 +676,6 @@ export default function ResultPage() {
             </motion.div>
           )}
 
-          {/* Text + Summary */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -765,22 +695,17 @@ export default function ResultPage() {
             </div>
           </motion.div>
 
-          {/* Keywords */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.4 }}
             className="border-2 border-[#223C55] dark:border-[#213B54] rounded-xl p-5 bg-[#A6BFE3]"
           >
-            <h2 className="font-semibold text-[#263F5D] mb-3 text-sm">
-              # คำสำคัญ (ThSL pattern)
-            </h2>
+            <h2 className="font-semibold text-[#263F5D] mb-3 text-sm"># คำสำคัญ (ThSL pattern)</h2>
 
             <div className="flex flex-wrap gap-2">
               {loadingKeywords ? (
-                <p className="text-[#263F5D]/60 text-sm animate-pulse">
-                  กำลังเรียงตามกฎ ThSL...
-                </p>
+                <p className="text-[#263F5D]/60 text-sm animate-pulse">กำลังเรียงตามกฎ ThSL...</p>
               ) : foundWords.length > 0 ? (
                 foundWords.map((item, idx) => {
                   const isActive = currentSinglePose === item.fullUrl;
@@ -808,7 +733,6 @@ export default function ResultPage() {
             </div>
           </motion.div>
 
-          {/* Action Buttons */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
