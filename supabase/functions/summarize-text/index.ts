@@ -2,12 +2,24 @@
 
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const typhoonApiKey = Deno.env.get("TYPHOON_API_KEY");
 
-// ✅ ใช้โมเดลจาก secret ก่อน ถ้าไม่มีใช้ default
+// ใช้โมเดลจาก secret ก่อน ถ้าไม่มีใช้ default
 const TYPHOON_MODEL =
   Deno.env.get("TYPHOON_MODEL") ?? "typhoon-v2.5-30b-a3b-instruct";
+
+// Supabase secrets
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+const SUPABASE_SERVICE_ROLE_KEY =
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+
+// สร้าง client (service role เพื่ออ่านตาราง/ไม่ติด RLS)
+const supabase =
+  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    : null;
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -24,7 +36,6 @@ function json(resBody: unknown, status = 200) {
 }
 
 function getWordCountTH(s: string) {
-  // นับแบบหยาบ: แยกด้วยช่องว่าง
   const parts = s.trim().split(/\s+/).filter(Boolean);
   return parts.length;
 }
@@ -32,21 +43,73 @@ function getWordCountTH(s: string) {
 function isShortVery(text: string) {
   const t = (text ?? "").toString().trim();
   if (!t) return true;
-  // เงื่อนไข: <= 12 ตัวอักษร (ไม่รวมช่องว่างปลาย) หรือ <= 2 คำ
   const charLen = t.length;
   const wc = getWordCountTH(t);
+  // ถ้าข้อความไม่มีเว้นวรรค เช่น "พ่อกินข้าว" wc จะเป็น 1
   return charLen <= 12 || wc <= 2;
 }
 
 function extractJsonFromText(content: string) {
-  // พยายามดึง JSON ก้อนแรก
   const match = content.match(/\{[\s\S]*\}/);
   const candidate = match ? match[0] : content;
   return JSON.parse(candidate);
 }
 
+// ===== DB MATCH =====
+async function pickSentenceFromDB(inputText: string) {
+  if (!supabase) {
+    return {
+      best: null as any,
+      error: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY",
+    };
+  }
+
+  const { data, error } = await supabase.rpc("pick_thsl_sentence", {
+    input_text: inputText,
+  });
+
+  if (error) return { best: null, error: error.message };
+
+  const best = Array.isArray(data) ? data[0] : null;
+  return { best, error: null };
+}
+
+// ===== KEYWORDS FROM THSL_FIXED =====
+function normalizeToken(t: string) {
+  return (t ?? "")
+    .toString()
+    .trim()
+    // ตัดเครื่องหมายทั่วไป
+    .replace(/[.,!?;:"'(){}\[\]<>]/g, "")
+    // แทนหลายช่องว่างเป็นช่องเดียว
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function keywordsFromThslFixed(thsl_fixed: string, max = 5) {
+  const raw = (thsl_fixed ?? "").toString().trim();
+  if (!raw) return [];
+
+  const tokens = raw
+    .split(/\s+/)
+    .map(normalizeToken)
+    .filter(Boolean);
+
+  // unique แบบรักษาลำดับ
+  const seen = new Set<string>();
+  const uniq: string[] = [];
+  for (const tok of tokens) {
+    if (!seen.has(tok)) {
+      seen.add(tok);
+      uniq.push(tok);
+    }
+  }
+
+  // ต้องการ 3-5 คำ: ถ้าน้อยกว่า 3 ก็ส่งเท่าที่มี
+  return uniq.slice(0, max);
+}
+
 serve(async (req) => {
-  // CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
@@ -67,119 +130,127 @@ serve(async (req) => {
       return json({ error: "No text provided" }, 400);
     }
 
-    // ✅ เงื่อนไข: ถ้าสั้นมาก คืนคำนั้นเลย (ไม่ต้องเรียกโมเดล)
-    if (isShortVery(text)) {
-      return json({
-        summary: text,
-        keywords: [],
-        originalText: text,
-        debug: { model: "short-circuit" },
-      });
-    }
+    // ===== 1) ได้ candidateSummary (extractive) =====
+    let candidateSummary = text;
 
-    console.log("Processing text length:", text.length);
-    console.log("Using model:", TYPHOON_MODEL);
-
-    // ✅ กติกาใหม่: ย่อแบบคัดลอกจากต้นฉบับเท่านั้น (extractive)
-    const response = await fetch(
-      "https://api.opentyphoon.ai/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${typhoonApiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: TYPHOON_MODEL,
-          messages: [
-            {
-              role: "system",
-              content: `คุณเป็นระบบ "ย่อข้อความแบบคัดลอกจากต้นฉบับ (extractive)" ภาษาไทย
-กติกา (ห้ามฝ่าฝืน):
-1) ย่อโดย "ตัดออก" เท่านั้น: ตัดคำฟุ่มเฟือย/คำซ้ำ/รายละเอียดไม่จำเป็นออก
-2) ห้ามสร้างคำใหม่ ห้ามแปลความหมาย ห้ามเรียบเรียงประโยคใหม่
-   - summary ต้องประกอบด้วยคำ/วลีที่ "ปรากฏในต้นฉบับเท่านั้น" (copy/paste ได้)
-   - ห้ามใส่คำเชื่อม/คำอธิบายเพิ่มเอง
-3) keywords ต้องเป็นคำที่อยู่ในต้นฉบับเท่านั้น 3-5 คำ (ถ้าสั้นมากให้เป็น [])
-4) ตอบกลับเป็น JSON เท่านั้น รูปแบบนี้เท่านั้น:
-{"summary":"...","keywords":["...","..."]}
-
-ตรวจทานก่อนส่ง:
-- summary/keywords ทุกคำต้องหาเจอในต้นฉบับแบบตรงตัว
-- ห้ามใส่ markdown ห้ามใส่ข้อความอื่นนอก JSON`,
-            },
-            {
-              role: "user",
-              content: text,
-            },
-          ],
-          max_tokens: 300,
-          temperature: 0,
-        }),
-      }
-    );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("TYPHOON API error:", response.status, errorText);
-      return json(
+    if (!isShortVery(text)) {
+      const response = await fetch(
+        "https://api.opentyphoon.ai/v1/chat/completions",
         {
-          error: "TYPHOON API error",
-          status: response.status,
-          detail: errorText,
-          model: TYPHOON_MODEL,
-        },
-        response.status
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${typhoonApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: TYPHOON_MODEL,
+            messages: [
+              {
+                role: "system",
+                content: `คุณเป็นระบบ "ย่อข้อความแบบคัดลอกจากต้นฉบับ (extractive)" ภาษาไทย
+กติกา:
+1) ย่อโดย "ตัดออก" เท่านั้น
+2) ห้ามสร้างคำใหม่ ห้ามเรียบเรียงใหม่
+3) ตอบกลับเป็น JSON เท่านั้น:
+{"summary":"..."}
+`,
+              },
+              { role: "user", content: text },
+            ],
+            max_tokens: 300,
+            temperature: 0,
+          }),
+        }
       );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return json(
+          {
+            error: "TYPHOON API error",
+            status: response.status,
+            detail: errorText,
+            model: TYPHOON_MODEL,
+          },
+          response.status
+        );
+      }
+
+      const data = await response.json();
+      const content: string | undefined = data?.choices?.[0]?.message?.content;
+
+      try {
+        const result = content ? extractJsonFromText(content) : {};
+        candidateSummary = (result?.summary ?? "").toString().trim() || text;
+      } catch {
+        candidateSummary = text;
+      }
     }
 
-    const data = await response.json();
-    const content: string | undefined = data?.choices?.[0]?.message?.content;
+    // ===== 2) บังคับ: summary ต้องเป็นประโยคที่มีใน DB เท่านั้น =====
+    const THRESHOLD = 0.35;
 
-    if (!content) {
-      return json({ error: "No content in TYPHOON response" }, 500);
-    }
+    const first = await pickSentenceFromDB(candidateSummary);
 
-    // Parse JSON from the response
-    let result: { summary?: string; keywords?: string[] } = {};
-    try {
-      result = extractJsonFromText(content);
-    } catch (e) {
-      console.error("Failed to parse TYPHOON response as JSON:", e);
-      // fallback: คืนข้อความต้นฉบับ (กันหลุดกติกา)
-      result = { summary: text, keywords: [] };
-    }
+    if (first.best && (first.best.score ?? 0) >= THRESHOLD) {
+      const summary = first.best.thai;
+      const thsl_fixed = first.best.thsl_fixed ?? "";
+      const keywords = keywordsFromThslFixed(thsl_fixed, 5);
 
-    // ✅ Guardrail: ถ้าโมเดลส่ง summary ว่าง ให้คืนต้นฉบับ
-    const summary = (result.summary ?? "").toString().trim() || text;
-
-    // ✅ Guardrail: ถ้าข้อความจริงๆสั้นมาก ให้คืนคำนั้นเลย
-    if (isShortVery(text)) {
       return json({
-        summary: text,
-        keywords: [],
+        found: true,
+        summary,           // ✅ ประโยคที่มีใน DB
+        thsl_fixed,        // ✅ เอาไปใช้ลำดับท่าทางได้เลย
+        keywords,          // ✅ มาจาก thsl_fixed (ชัวร์สุด)
         originalText: text,
-        debug: { model: "short-circuit" },
+        debug: {
+          model: isShortVery(text) ? "short-circuit" : TYPHOON_MODEL,
+          candidateSummary,
+          score: first.best.score,
+          used: "candidateSummary",
+        },
       });
     }
 
-    // ✅ keywords: จำกัดเป็น array ของ string และไม่เกิน 5
-    const keywords = Array.isArray(result.keywords)
-      ? result.keywords
-          .map((k) => (k ?? "").toString().trim())
-          .filter(Boolean)
-          .slice(0, 5)
-      : [];
+    // fallback: ลองแมตช์จากข้อความต้นฉบับตรงๆ
+    const second = await pickSentenceFromDB(text);
 
+    if (second.best && (second.best.score ?? 0) >= THRESHOLD) {
+      const summary = second.best.thai;
+      const thsl_fixed = second.best.thsl_fixed ?? "";
+      const keywords = keywordsFromThslFixed(thsl_fixed, 5);
+
+      return json({
+        found: true,
+        summary,
+        thsl_fixed,
+        keywords,
+        originalText: text,
+        debug: {
+          model: isShortVery(text) ? "short-circuit" : TYPHOON_MODEL,
+          candidateSummary,
+          score: second.best.score,
+          used: "fallback(originalText)",
+        },
+      });
+    }
+
+    // ไม่พบใน DB
     return json({
-      summary,
-      keywords,
+      found: false,
+      summary: null,
+      thsl_fixed: null,
+      keywords: [],
       originalText: text,
-      debug: { model: TYPHOON_MODEL },
+      debug: {
+        model: isShortVery(text) ? "short-circuit" : TYPHOON_MODEL,
+        candidateSummary,
+        error: first.error ?? second.error ?? null,
+      },
     });
   } catch (error) {
-    console.error("Error in summarize-text function:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
     return json({ error: errorMessage }, 500);
   }
 });
