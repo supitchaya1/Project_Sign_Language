@@ -649,7 +649,7 @@ export default function ResultPage() {
                   : "bg-transparent text-[#263F5D] hover:bg-white/60"
               }`}
             >
-              ดูทีละคำ (Pose)
+              ดูทีละคำ (คำสำคัญ)
             </button>
           </div>
 
