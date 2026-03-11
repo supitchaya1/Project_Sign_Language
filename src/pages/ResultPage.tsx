@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Download, Video, RefreshCw } from "lucide-react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import PosePlayer from "@/components/PosePlayer";
 import { toast } from "sonner";
 
 import { THSL_RULES, Role as RuleRole, ThslRule } from "@/services/thslRules";
-import { saveHistory } from "@/services/history";
+import { saveHistory, type HistoryRecord } from "@/services/history";
 
 // ==========================================
 // 1) Backend URL + buildPoseUrl
@@ -36,6 +36,19 @@ interface ResultState {
   summary?: string;
   keywords?: string[];
   thsl_fixed?: string;
+}
+
+interface HistoryResultState {
+  fromHistory?: boolean;
+  historyItem?: HistoryRecord;
+  resultData?: {
+    text?: string;
+    summary?: string;
+    translatedText?: string;
+    keywords?: string[];
+    sentenceVideoUrl?: string;
+    thsl_fixed?: string;
+  };
 }
 
 interface WordData {
@@ -218,36 +231,81 @@ export default function ResultPage() {
   const navigate = useNavigate();
   const location = useLocation();
 
+  type ViewMode = "sentence" | "single";
+
   const [foundWords, setFoundWords] = useState<ProcessedWordData[]>([]);
   const [loadingKeywords, setLoadingKeywords] = useState(false);
-
-  type ViewMode = "sentence" | "single";
   const [viewMode, setViewMode] = useState<ViewMode>("sentence");
-
   const [currentSinglePose, setCurrentSinglePose] = useState<string | null>(null);
-
   const [sentenceVideoUrl, setSentenceVideoUrl] = useState<string | null>(null);
   const [loadingSentenceVideo, setLoadingSentenceVideo] = useState(false);
+
   const prevBlobUrl = useRef<string | null>(null);
-
-  const state = location.state as ResultState | null;
-
-  const resultData = {
-    text: state?.originalText || "ไม่มีข้อความ",
-    summary: state?.summary || "ไม่มีข้อมูลสรุป",
-    keywords: state?.keywords || [],
-    thsl_fixed: state?.thsl_fixed || "",
-  };
-
-  // ✅ กันการบันทึกซ้ำตอน re-render
   const savedOnceRef = useRef(false);
 
-  // ✅ บันทึกประวัติลง Supabase (ทำครั้งเดียว)
+  const state = (location.state as (ResultState & HistoryResultState) | null) ?? null;
+  const isFromHistory = Boolean(state?.fromHistory);
+
+  const resultData = useMemo(() => {
+    if (state?.fromHistory && state?.resultData) {
+      return {
+        text: state.resultData.text || state.historyItem?.input_text || "ไม่มีข้อความ",
+        summary:
+          state.resultData.summary ||
+          state.resultData.translatedText ||
+          state.historyItem?.summary_text ||
+          state.historyItem?.translated_result ||
+          "ไม่มีข้อมูลสรุป",
+        translatedText:
+          state.resultData.translatedText ||
+          state.historyItem?.translated_result ||
+          "",
+        keywords:
+          state.resultData.keywords ||
+          (state.historyItem?.keywords
+            ? state.historyItem.keywords
+                .split(",")
+                .map((k) => k.trim())
+                .filter(Boolean)
+            : []),
+        thsl_fixed: state.resultData.thsl_fixed || "",
+        historyVideoUrl: state.resultData.sentenceVideoUrl || state.historyItem?.video_url || "",
+      };
+    }
+
+    return {
+      text: state?.originalText || "ไม่มีข้อความ",
+      summary: state?.summary || "ไม่มีข้อมูลสรุป",
+      translatedText: state?.summary || "",
+      keywords: state?.keywords || [],
+      thsl_fixed: state?.thsl_fixed || "",
+      historyVideoUrl: "",
+    };
+  }, [state]);
+
+  const setNewBlobUrl = (url: string | null) => {
+    if (prevBlobUrl.current && prevBlobUrl.current.startsWith("blob:")) {
+      URL.revokeObjectURL(prevBlobUrl.current);
+      prevBlobUrl.current = null;
+    }
+    if (url && url.startsWith("blob:")) prevBlobUrl.current = url;
+    setSentenceVideoUrl(url);
+  };
+
+  // โหลดวิดีโอเดิมจาก history ถ้ามี
+  useEffect(() => {
+    if (isFromHistory && resultData.historyVideoUrl) {
+      setSentenceVideoUrl(resultData.historyVideoUrl);
+    }
+  }, [isFromHistory, resultData.historyVideoUrl]);
+
+  // บันทึก history เฉพาะตอนมาจากหน้าแปลใหม่เท่านั้น
   useEffect(() => {
     if (savedOnceRef.current) return;
+    if (isFromHistory) return;
 
     const inputText = (resultData.text ?? "").trim();
-    const translated = (resultData.summary ?? "").trim();
+    const translated = (resultData.summary ?? "").replace(/\s+/g, "").trim();
 
     if (!inputText || inputText === "ไม่มีข้อความ") return;
     if (!translated || translated === "ไม่มีข้อมูลสรุป") return;
@@ -259,40 +317,36 @@ export default function ResultPage() {
         await saveHistory({
           input_text: inputText,
           translated_result: translated,
+          summary_text: (resultData.summary ?? "").replace(/\s+/g, "").trim(),
+          keywords: Array.isArray(resultData.keywords)
+            ? resultData.keywords.join(", ")
+            : "",
+          video_url: resultData.historyVideoUrl || undefined,
         });
       } catch (e) {
-        // ไม่ทำให้หน้า result พัง แค่แจ้งเตือนเบาๆ
         console.warn("saveHistory failed:", e);
         toast.warning("บันทึกประวัติไม่สำเร็จ (ตรวจสอบการล็อกอิน / RLS)");
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const setNewBlobUrl = (url: string | null) => {
-    if (prevBlobUrl.current) {
-      URL.revokeObjectURL(prevBlobUrl.current);
-      prevBlobUrl.current = null;
-    }
-    if (url) prevBlobUrl.current = url;
-    setSentenceVideoUrl(url);
-  };
+  }, [isFromHistory, resultData]);
 
   useEffect(() => {
     let cancelled = false;
     const abort = new AbortController();
 
     const run = async () => {
-      const kwTokens = cleanTokens(resultData.keywords || []);
+      const summaryText = (resultData.summary ?? "").replace(/\s+/g, "").trim();
+
+      const kwTokens = uniqPreserveOrder(segmentThaiWords(summaryText));
       const fixedTokens = resultData.thsl_fixed?.trim()
         ? cleanTokens(resultData.thsl_fixed.trim().split(/\s+/))
         : [];
 
-      if (fixedTokens.length === 0 && kwTokens.length === 0) {
+      if (fixedTokens.length === 0 && kwTokens.length === 0 && !summaryText) {
         if (cancelled) return;
         setFoundWords([]);
         setCurrentSinglePose(null);
-        setNewBlobUrl(null);
+        setNewBlobUrl(isFromHistory ? resultData.historyVideoUrl || null : null);
         setLoadingKeywords(false);
         setLoadingSentenceVideo(false);
         return;
@@ -300,8 +354,14 @@ export default function ResultPage() {
 
       if (cancelled) return;
       setLoadingKeywords(true);
-      setLoadingSentenceVideo(true);
-      setNewBlobUrl(null);
+
+      if (!isFromHistory || !resultData.historyVideoUrl) {
+        setLoadingSentenceVideo(true);
+        setNewBlobUrl(null);
+      } else {
+        setLoadingSentenceVideo(false);
+        setSentenceVideoUrl(resultData.historyVideoUrl);
+      }
 
       const { data: mapData, error: mapErr } = await supabase
         .from("sl_category_role")
@@ -327,16 +387,38 @@ export default function ResultPage() {
       if (fixedTokens.length > 0) {
         finalOrderedTokens = dropSubTokens(uniqPreserveOrder(fixedTokens));
       } else {
-        const textTokens = uniqPreserveOrder(segmentThaiWords(resultData.text));
+        const textTokens = uniqPreserveOrder(segmentThaiWords(summaryText));
         const candidateTextTokens = textTokens.slice(0, 200);
 
         let extraFromText: string[] = [];
 
         const IMPORTANT_ROLES = new Set<RuleRole>([
-          "S","V","O","NEG","PP(Place)","Adv(Time)",
-          "When/Why/Where/How(?)","What(?)","Who(?)","Whose(?)","Q(?)",
-          "Pronoun","V2B","ClausalVerb","Adj","Adj1","Adj2","NP","PAdj","ComparativeAdj",
-          "Money","Number","Currency","Age","Year","Break",
+          "S",
+          "V",
+          "O",
+          "NEG",
+          "PP(Place)",
+          "Adv(Time)",
+          "When/Why/Where/How(?)",
+          "What(?)",
+          "Who(?)",
+          "Whose(?)",
+          "Q(?)",
+          "Pronoun",
+          "V2B",
+          "ClausalVerb",
+          "Adj",
+          "Adj1",
+          "Adj2",
+          "NP",
+          "PAdj",
+          "ComparativeAdj",
+          "Money",
+          "Number",
+          "Currency",
+          "Age",
+          "Year",
+          "Break",
         ]);
 
         if (candidateTextTokens.length > 0) {
@@ -346,7 +428,7 @@ export default function ResultPage() {
             .in("word", candidateTextTokens);
 
           if (textErr) {
-            console.warn("⚠️ Cannot load SL_word for originalText tokens:", textErr);
+            console.warn("⚠️ Cannot load SL_word for summary tokens:", textErr);
           } else {
             const rows = (textRows as WordData[]) || [];
             const seen = new Set<string>();
@@ -373,7 +455,7 @@ export default function ResultPage() {
 
         const mergedTokens = uniqPreserveOrder([...kwTokens, ...extraFromText]);
         const mergedNoSub = dropSubTokens(mergedTokens);
-        const tokensThai = orderTokensByOriginalText(resultData.text, mergedNoSub);
+        const tokensThai = orderTokensByOriginalText(summaryText, mergedNoSub);
 
         const unique = Array.from(new Set(tokensThai));
         const { data, error } = await supabase
@@ -408,9 +490,13 @@ export default function ResultPage() {
               const rb = getRole(b.category);
 
               const boostA =
-                isNumberToken(t) && (a.category === "ตัวเลข" || a.category === "จำนวน") ? -1000 : 0;
+                isNumberToken(t) && (a.category === "ตัวเลข" || a.category === "จำนวน")
+                  ? -1000
+                  : 0;
               const boostB =
-                isNumberToken(t) && (b.category === "ตัวเลข" || b.category === "จำนวน") ? -1000 : 0;
+                isNumberToken(t) && (b.category === "ตัวเลข" || b.category === "จำนวน")
+                  ? -1000
+                  : 0;
 
               return ra.priority + boostA - (rb.priority + boostB);
             })[0];
@@ -428,7 +514,9 @@ export default function ResultPage() {
         }
 
         const rule = findExactRule(tagged);
-        finalOrderedTokens = rule ? reorderByRule(tagged, rule.thslOrder) : tagged.map((t) => t.word);
+        finalOrderedTokens = rule
+          ? reorderByRule(tagged, rule.thslOrder)
+          : tagged.map((t) => t.word);
       }
 
       const uniqueFinal = Array.from(new Set(finalOrderedTokens));
@@ -464,9 +552,13 @@ export default function ResultPage() {
             const rb = getRole(b.category);
 
             const boostA =
-              isNumberToken(t) && (a.category === "ตัวเลข" || a.category === "จำนวน") ? -1000 : 0;
+              isNumberToken(t) && (a.category === "ตัวเลข" || a.category === "จำนวน")
+                ? -1000
+                : 0;
             const boostB =
-              isNumberToken(t) && (b.category === "ตัวเลข" || b.category === "จำนวน") ? -1000 : 0;
+              isNumberToken(t) && (b.category === "ตัวเลข" || b.category === "จำนวน")
+                ? -1000
+                : 0;
 
             return ra.priority + boostA - (rb.priority + boostB);
           })[0];
@@ -491,6 +583,12 @@ export default function ResultPage() {
       setFoundWords(processed);
       setCurrentSinglePose(processed.length > 0 ? processed[0].fullUrl : null);
       setLoadingKeywords(false);
+
+      if (isFromHistory && resultData.historyVideoUrl) {
+        setLoadingSentenceVideo(false);
+        setSentenceVideoUrl(resultData.historyVideoUrl);
+        return;
+      }
 
       try {
         const filenames = processed.map((x) => (x.pose_filename ?? "").trim()).filter(Boolean);
@@ -542,10 +640,16 @@ export default function ResultPage() {
     return () => {
       cancelled = true;
       abort.abort();
-      if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current);
+      if (prevBlobUrl.current && prevBlobUrl.current.startsWith("blob:")) {
+        URL.revokeObjectURL(prevBlobUrl.current);
+      }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(resultData.keywords || []), resultData.text, resultData.thsl_fixed]);
+  }, [
+    isFromHistory,
+    resultData.historyVideoUrl,
+    resultData.summary,
+    resultData.thsl_fixed,
+  ]);
 
   const handleDownloadSentenceVideo = () => {
     if (!sentenceVideoUrl) return;
@@ -554,6 +658,41 @@ export default function ResultPage() {
     a.download = "sentence.mp4";
     a.click();
   };
+
+  const handleBackToTranslate = () => {
+    navigate("/translate", {
+      state: {
+        originalText: resultData.text,
+      },
+    });
+  };
+
+  const noData =
+    !state ||
+    (!resultData.text &&
+      !resultData.summary &&
+      (!resultData.keywords || resultData.keywords.length === 0));
+
+  if (noData) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-[#E8D5F0] to-[#FEFBF4] dark:from-[#1a2f44] dark:to-[#0F1F2F] pt-20 pb-8 md:pt-24 md:pb-12">
+        <div className="container mx-auto px-4 max-w-xl">
+          <div className="border-2 border-[#223C55] rounded-xl p-6 bg-[#A6BFE3] text-center">
+            <h1 className="text-xl font-bold text-[#263F5D] mb-3">ไม่พบข้อมูลผลลัพธ์</h1>
+            <p className="text-[#263F5D]/70 mb-4 text-sm">
+              กรุณากลับไปหน้าแปลเสียงหรือเลือกดูจากหน้าประวัติอีกครั้ง
+            </p>
+            <Button
+              onClick={() => navigate("/translate")}
+              className="bg-[#0F1F2F] hover:bg-[#1a2f44] text-[#C9A7E3]"
+            >
+              ไปหน้าแปลเสียง
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#E8D5F0] to-[#FEFBF4] dark:from-[#1a2f44] dark:to-[#0F1F2F] pt-20 pb-8 md:pt-24 md:pb-12">
@@ -616,7 +755,12 @@ export default function ResultPage() {
                     <span className="text-xs">กำลังสร้างวิดีโอทั้งประโยค...</span>
                   </div>
                 ) : sentenceVideoUrl ? (
-                  <video className="w-full h-full object-contain" src={sentenceVideoUrl} controls playsInline />
+                  <video
+                    className="w-full h-full object-contain"
+                    src={sentenceVideoUrl}
+                    controls
+                    playsInline
+                  />
                 ) : (
                   <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
                     <span className="text-3xl mb-2">🚫</span>
@@ -690,7 +834,7 @@ export default function ResultPage() {
             <div className="border-2 border-[#223C55] dark:border-[#213B54] rounded-xl p-5 bg-[#A6BFE3]">
               <h2 className="font-semibold text-[#263F5D] mb-2 text-sm">สรุปใจความ</h2>
               <p className="text-[#263F5D] leading-relaxed text-sm">
-                {(resultData.summary ?? "").replace(/\s+/g, "")}
+                {(resultData.summary ?? "").replace(/\s+/g, "").trim()}
               </p>
             </div>
           </motion.div>
@@ -741,7 +885,7 @@ export default function ResultPage() {
           >
             <Button
               variant="outline"
-              onClick={() => navigate("/translate")}
+              onClick={handleBackToTranslate}
               className="py-6 text-[#263F5D] border-2 border-[#223C55] bg-white/50 hover:bg-white/80 text-sm font-medium"
             >
               <ArrowLeft size={16} className="mr-2" />

@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { Search, Calendar, Eye, Edit, Trash2, Filter, Check } from "lucide-react";
+import { Search, Calendar, Eye, Trash2, Filter, Check } from "lucide-react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/contexts/AuthContext";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { fetchMyHistory, deleteHistory, type HistoryRecord } from "@/services/history";
 import {
   Dialog,
@@ -35,14 +35,13 @@ function safeTime(s?: string | null) {
 
 export default function HistoryPage() {
   const { isAuthenticated } = useAuth();
+  const navigate = useNavigate();
 
   const [items, setItems] = useState<HistoryRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
-
-  // ✅ NEW: sort order state
   const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
 
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -81,7 +80,6 @@ export default function HistoryPage() {
     };
   }, [isAuthenticated]);
 
-  // ✅ UPDATED: filter + sort
   const filteredItems = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
 
@@ -125,6 +123,27 @@ export default function HistoryPage() {
     } finally {
       setIsDeleting(false);
     }
+  };
+
+  const handleViewVideo = (item: HistoryRecord) => {
+    navigate("/result", {
+      state: {
+        fromHistory: true,
+        historyItem: item,
+        resultData: {
+          text: item.input_text ?? "",
+          translatedText: item.translated_result ?? "",
+          summary: item.summary_text ?? "",
+          keywords: item.keywords
+            ? item.keywords
+                .split(",")
+                .map((k) => k.trim())
+                .filter(Boolean)
+            : [],
+          sentenceVideoUrl: item.video_url ?? "",
+        },
+      },
+    });
   };
 
   if (!isAuthenticated) {
@@ -214,7 +233,6 @@ export default function HistoryPage() {
               />
             </div>
 
-            {/* ✅ NEW: Filter dropdown (Sort) */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -278,8 +296,9 @@ export default function HistoryPage() {
                     <p className="text-[#263F5D] text-sm line-clamp-2">{item.input_text}</p>
 
                     {item.translated_result && (
-                      <p className="text-[#263F5D]/70 text-xs mt-2 line-clamp-2">
-                        {item.translated_result}
+                      <p className="text-xs mt-2 text-[#263F5D]/80">
+                        <span className="font-semibold">สรุปใจความ:</span>{" "}
+                        {(item.translated_result ?? "").replace(/\s+/g, "").trim()}
                       </p>
                     )}
                   </div>
@@ -288,7 +307,7 @@ export default function HistoryPage() {
                     <Button
                       size="sm"
                       className="flex items-center gap-1 bg-[#0F1F2F] hover:bg-[#1a2f44] text-[#C9A7E3] text-xs px-3"
-                      onClick={() => toast.info("ปุ่มดูวิดีโอ: ยังไม่ได้ผูก action")}
+                      onClick={() => handleViewVideo(item)}
                     >
                       <Eye size={12} />
                       <span className="hidden sm:inline">ดูวิดีโอ</span>
