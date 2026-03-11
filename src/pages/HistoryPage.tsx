@@ -295,16 +295,6 @@ export default function HistoryPage() {
                     </Button>
 
                     <Button
-                      variant="outline"
-                      size="sm"
-                      className="flex items-center gap-1 border-2 border-[#223C55] text-[#263F5D] bg-white/50 hover:bg-white/70 text-xs px-3"
-                      onClick={() => toast.info("ปุ่มแก้ไข: ยังไม่ได้ผูก action")}
-                    >
-                      <Edit size={12} />
-                      <span className="hidden sm:inline">แก้ไข</span>
-                    </Button>
-
-                    <Button
                       variant="destructive"
                       size="sm"
                       onClick={() => handleDelete(item.id)}
