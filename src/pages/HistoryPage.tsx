@@ -15,7 +15,6 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 
-// ✅ shadcn dropdown
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,6 +30,14 @@ function safeTime(s?: string | null) {
   if (!s) return 0;
   const t = new Date(s).getTime();
   return Number.isFinite(t) ? t : 0;
+}
+
+function normalizeText(s?: string | null) {
+  return (s ?? "").trim();
+}
+
+function makeDuplicateKey(item: HistoryRecord) {
+  return `${normalizeText(item.input_text)}|||${normalizeText(item.translated_result)}`;
 }
 
 export default function HistoryPage() {
@@ -57,23 +64,27 @@ export default function HistoryPage() {
     }
 
     let isMounted = true;
-    setIsLoading(true);
-    setErrorMessage(null);
 
-    fetchMyHistory()
-      .then((data) => {
+    const loadHistory = async () => {
+      try {
+        setIsLoading(true);
+        setErrorMessage(null);
+
+        const data = await fetchMyHistory();
         if (!isMounted) return;
+
         setItems(data);
-      })
-      .catch((error: unknown) => {
+      } catch (error: unknown) {
         if (!isMounted) return;
         const message = error instanceof Error ? error.message : "โหลดประวัติไม่สำเร็จ";
         setErrorMessage(message);
-      })
-      .finally(() => {
+      } finally {
         if (!isMounted) return;
         setIsLoading(false);
-      });
+      }
+    };
+
+    loadHistory();
 
     return () => {
       isMounted = false;
@@ -84,21 +95,42 @@ export default function HistoryPage() {
     const q = searchQuery.trim().toLowerCase();
 
     let list = items;
+
     if (q) {
       list = list.filter((it) => {
-        const a = (it.input_text || "").toLowerCase();
-        const b = (it.translated_result || "").toLowerCase();
-        return a.includes(q) || b.includes(q);
+        const input = normalizeText(it.input_text).toLowerCase();
+        const translated = normalizeText(it.translated_result).toLowerCase();
+        const summary = normalizeText(it.summary_text).toLowerCase();
+        const keywords = normalizeText(it.keywords).toLowerCase();
+
+        return (
+          input.includes(q) ||
+          translated.includes(q) ||
+          summary.includes(q) ||
+          keywords.includes(q)
+        );
       });
     }
 
-    const sorted = [...list].sort((x, y) => {
-      const tx = safeTime(x.created_at);
-      const ty = safeTime(y.created_at);
-      return sortOrder === "newest" ? ty - tx : tx - ty;
+    const sorted = [...list].sort((a, b) => {
+      const ta = safeTime(a.created_at);
+      const tb = safeTime(b.created_at);
+      return sortOrder === "newest" ? tb - ta : ta - tb;
     });
 
-    return sorted;
+    // กันซ้ำบนหน้าแสดงผลอีกชั้น
+    // ถ้าซ้ำกันจะเหลือแค่รายการแรกตามลำดับ sort ที่เลือก
+    const seen = new Set<string>();
+    const deduped: HistoryRecord[] = [];
+
+    for (const item of sorted) {
+      const key = makeDuplicateKey(item);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(item);
+    }
+
+    return deduped;
   }, [items, searchQuery, sortOrder]);
 
   const handleDelete = (id: string) => {
@@ -113,7 +145,9 @@ export default function HistoryPage() {
 
     try {
       await deleteHistory(itemToDelete);
+
       setItems((prev) => prev.filter((x) => x.id !== itemToDelete));
+
       toast.success("ลบประวัติสำเร็จ");
       setShowDeleteModal(false);
       setItemToDelete(null);
@@ -228,7 +262,7 @@ export default function HistoryPage() {
               <Input
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="ค้นหาข้อความ หรือคำสำคัญ"
+                placeholder="ค้นหาข้อความ คำแปล คำสำคัญ"
                 className="pl-9 bg-white/50 border-2 border-[#223C55] text-[#263F5D] placeholder:text-[#263F5D]/40 text-sm"
               />
             </div>
@@ -285,25 +319,33 @@ export default function HistoryPage() {
                 className="border-2 border-[#223C55] dark:border-[#213B54] rounded-xl p-5 bg-[#A6BFE3]"
               >
                 <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1">
+                  <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-2">
-                      <Calendar size={14} className="text-[#263F5D]/40" />
-                      <span className="text-xs text-[#263F5D]/60">
+                      <Calendar size={14} className="text-[#263F5D]/40 shrink-0" />
+                      <span className="text-xs text-[#263F5D]/60 break-all">
                         {item.created_at ? new Date(item.created_at).toLocaleString() : "-"}
                       </span>
                     </div>
 
-                    <p className="text-[#263F5D] text-sm line-clamp-2">{item.input_text}</p>
+                    <p className="text-[#263F5D] text-sm line-clamp-2 break-words">
+                      {item.input_text || "-"}
+                    </p>
 
-                    {item.translated_result && (
-                      <p className="text-xs mt-2 text-[#263F5D]/80">
+                    {!!item.translated_result && (
+                      <p className="text-xs mt-2 text-[#263F5D]/80 break-words">
                         <span className="font-semibold">สรุปใจความ:</span>{" "}
-                        {(item.translated_result ?? "").replace(/\s+/g, "").trim()}
+                        {normalizeText(item.translated_result).replace(/\s+/g, "")}
+                      </p>
+                    )}
+
+                    {!!item.keywords && (
+                      <p className="text-xs mt-1 text-[#263F5D]/70 break-words">
+                        <span className="font-semibold">คำสำคัญ:</span> {item.keywords}
                       </p>
                     )}
                   </div>
 
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 shrink-0">
                     <Button
                       size="sm"
                       className="flex items-center gap-1 bg-[#0F1F2F] hover:bg-[#1a2f44] text-[#C9A7E3] text-xs px-3"
@@ -330,22 +372,25 @@ export default function HistoryPage() {
         )}
       </div>
 
-      <Dialog open={showDeleteModal} onOpenChange={(v) => !isDeleting && setShowDeleteModal(v)}>
+      <Dialog open={showDeleteModal} onOpenChange={(open) => !isDeleting && setShowDeleteModal(open)}>
         <DialogContent className="sm:max-w-md bg-white dark:bg-[#1a2f44]">
           <DialogHeader>
             <DialogTitle className="text-center text-[#263F5D] dark:text-white">
               ยืนยันการลบประวัติ
             </DialogTitle>
           </DialogHeader>
+
           <div className="py-4 text-center">
             <p className="text-[#263F5D]/60 dark:text-white/60 text-sm">
               คุณต้องการลบประวัตินี้หรือไม่? การกระทำนี้ไม่สามารถย้อนกลับได้
             </p>
           </div>
+
           <DialogFooter className="flex gap-2 sm:justify-center">
             <Button variant="destructive" onClick={confirmDelete} disabled={isDeleting}>
               {isDeleting ? "กำลังลบ..." : "ลบ"}
             </Button>
+
             <Button
               variant="outline"
               onClick={() => setShowDeleteModal(false)}
