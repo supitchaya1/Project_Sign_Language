@@ -3,7 +3,7 @@ import { Mic, Upload, X, FileAudio, Loader2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Dialog,
   DialogContent,
@@ -13,6 +13,7 @@ import {
 import { toast } from 'sonner';
 // import { supabase } from '@/integrations/supabase/client';
 import { supabase } from "@/lib/supabase";
+
 declare namespace Intl {
   interface SegmentData {
     segment: string;
@@ -76,12 +77,20 @@ declare global {
   }
 }
 
+type TranslatePageLocationState = {
+  originalText?: string;
+};
+
 export default function TranslatePage() {
   const navigate = useNavigate();
+  const location = useLocation();
+
   const [isRecording, setIsRecording] = useState(false);
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [text, setText] = useState('');
-  
+
+  const state = (location.state as TranslatePageLocationState | null) ?? null;
+
   const segmenter =
     typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
       ? new Intl.Segmenter('th', { granularity: 'word' })
@@ -124,10 +133,21 @@ export default function TranslatePage() {
 
     return s.split(/\s+/).slice(0, maxWords).join(' ');
   };
-  
+
   const wordCount = getWordCount(text);
   const maxWords = 150;
-  
+
+  useEffect(() => {
+    const incomingText = state?.originalText?.trim();
+    if (!incomingText) return;
+
+    const clamped = clampToMaxWords(incomingText, maxWords);
+    setText(clamped);
+
+    // ล้าง state ทิ้ง เพื่อไม่ให้ข้อความเดิมติดค้างเมื่อเข้าหน้านี้รอบถัดไป
+    navigate(location.pathname, { replace: true, state: null });
+  }, [state?.originalText, maxWords, navigate, location.pathname]);
+
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newText = e.target.value;
     const clamped = clampToMaxWords(newText, maxWords);
@@ -139,16 +159,20 @@ export default function TranslatePage() {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showSummarizeErrorModal, setShowSummarizeErrorModal] = useState(false);
   const [isProcessingFile, setIsProcessingFile] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
 
   useEffect(() => {
-    const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const SpeechRecognitionAPI =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
     if (SpeechRecognitionAPI) {
       const recognition = new SpeechRecognitionAPI();
       recognition.continuous = true;
       recognition.interimResults = true;
-      recognition.lang = 'th-TH'; // Thai language
+      recognition.lang = 'th-TH';
 
       recognition.onresult = (event: SpeechRecognitionEvent) => {
         let finalTranscript = '';
@@ -164,8 +188,9 @@ export default function TranslatePage() {
         }
 
         if (finalTranscript) {
-          setText(prev => {
-            const next = prev + finalTranscript;
+          setText((prev) => {
+            const separator = prev && !prev.endsWith(' ') ? ' ' : '';
+            const next = prev + separator + finalTranscript.trim();
             const clamped = clampToMaxWords(next, maxWords);
             if (clamped !== next) toast.warning(`เกินขีดจำกัด ${maxWords} คำ`);
             return clamped;
@@ -176,6 +201,7 @@ export default function TranslatePage() {
       recognition.onerror = (event) => {
         console.error('Speech recognition error:', event.error);
         setIsRecording(false);
+
         if (event.error === 'not-allowed') {
           toast.error('กรุณาอนุญาตการใช้งานไมโครโฟน');
         } else {
@@ -195,7 +221,7 @@ export default function TranslatePage() {
         recognitionRef.current.abort();
       }
     };
-  }, []);
+  }, [maxWords]);
 
   const handleStartRecording = () => {
     if (!recognitionRef.current) {
@@ -233,27 +259,25 @@ export default function TranslatePage() {
   const transcribeAudioFile = async (file: File) => {
     setIsProcessingFile(true);
     toast.info('กำลังประมวลผลไฟล์เสียงด้วย Whisper AI...');
-    
+
     try {
-      // Convert file to base64
       const arrayBuffer = await file.arrayBuffer();
       const uint8Array = new Uint8Array(arrayBuffer);
       let binary = '';
       const chunkSize = 32768;
-      
+
       for (let i = 0; i < uint8Array.length; i += chunkSize) {
         const chunk = uint8Array.slice(i, i + chunkSize);
         binary += String.fromCharCode.apply(null, Array.from(chunk));
       }
-      
+
       const base64Audio = btoa(binary);
-      
-      // Call the edge function
+
       const { data, error } = await supabase.functions.invoke('transcribe-audio', {
-        body: { 
+        body: {
           audio: base64Audio,
-          mimeType: file.type 
-        }
+          mimeType: file.type,
+        },
       });
 
       if (error) {
@@ -267,69 +291,66 @@ export default function TranslatePage() {
       }
 
       if (data?.text) {
-        setText(prev => {
+        setText((prev) => {
           const next = prev + (prev ? ' ' : '') + data.text;
           const clamped = clampToMaxWords(next, maxWords);
           if (clamped !== next) toast.warning(`เกินขีดจำกัด ${maxWords} คำ`);
           return clamped;
         });
         toast.success('แปลงไฟล์เสียงเป็นข้อความสำเร็จ');
-      } 
-      else {
+      } else {
         toast.warning('ไม่พบข้อความในไฟล์เสียง');
       }
     } catch (error) {
       console.error('Error transcribing file:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
       toast.error(`เกิดข้อผิดพลาด: ${errorMessage}`);
     } finally {
       setIsProcessingFile(false);
     }
   };
 
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
   const handleSubmit = async () => {
     if (!text.trim()) {
       toast.error('กรุณาบันทึกเสียงหรือพิมพ์ข้อความก่อน');
       return;
     }
-    
+
     setIsSubmitting(true);
     toast.info('กำลังสรุปข้อความด้วย TYPHOON AI...');
-    
+
     try {
-      const { data, error } = await supabase.functions.invoke("summarize-text", {
+      const { data, error } = await supabase.functions.invoke('summarize-text', {
         body: { text: text.trim() },
       });
 
       if (error) {
-        console.error("Summarize error:", error);
-        throw new Error(error.message || "Failed to summarize text");
+        console.error('Summarize error:', error);
+        throw new Error(error.message || 'Failed to summarize text');
       }
 
       if (data?.error) {
-        console.error("API error:", data.error);
+        console.error('API error:', data.error);
         throw new Error(data.error);
       }
 
-      // ✅ บังคับ “เฉพาะประโยคที่มีใน DB เท่านั้น”
       if (!data?.found) {
         setShowSummarizeErrorModal(true);
-        return; // ✅ ไม่ไปหน้า result
+        return;
       }
 
-      navigate("/result", {
+      navigate('/result', {
         state: {
           originalText: text.trim(),
-          summary: data.summary,         // ✅ ประโยคไทยจาก DB
-          thsl_fixed: data.thsl_fixed,   // ✅ ส่งไปใช้ต่อ
+          summary: data.summary,
+          thsl_fixed: data.thsl_fixed,
           keywords: data.keywords ?? [],
         },
       });
     } catch (error) {
-      console.error("Error summarizing:", error);
-      toast.error("สร้างสรุปไม่สำเร็จ กรุณาลองใหม่อีกครั้ง");
+      console.error('Error summarizing:', error);
+      toast.error('สร้างสรุปไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
       setShowSummarizeErrorModal(true);
     } finally {
       setIsSubmitting(false);
@@ -374,9 +395,7 @@ export default function TranslatePage() {
                         <motion.div
                           key={i}
                           className="w-0.5 bg-white rounded-full"
-                          animate={{
-                            height: [8, 20, 8],
-                          }}
+                          animate={{ height: [8, 20, 8] }}
                           transition={{
                             repeat: Infinity,
                             duration: 0.5,
@@ -395,6 +414,7 @@ export default function TranslatePage() {
                   <Mic size={24} className="text-white" />
                 </button>
               )}
+
               <p className="text-[#263F5D] mt-3 text-sm">
                 {isRecording ? 'กำลังบันทึก... คลิกเพื่อหยุด' : 'บันทึกเสียง'}
               </p>
@@ -421,9 +441,11 @@ export default function TranslatePage() {
                   ) : (
                     <FileAudio size={18} className="text-[#263F5D]" />
                   )}
+
                   <span className="text-[#263F5D] text-sm flex-1 truncate">
                     {isProcessingFile ? 'กำลังประมวลผล...' : audioFile.name}
                   </span>
+
                   <button
                     onClick={() => setAudioFile(null)}
                     className="p-1 hover:bg-white/50 rounded"
@@ -442,6 +464,7 @@ export default function TranslatePage() {
                   เลือกไฟล์เสียง
                 </Button>
               )}
+
               <p className="text-xs text-[#263F5D]/70 mt-2">
                 *ไฟล์เสียงของคุณจะถูกใช้เพื่อการแปลเท่านั้น และจะถูกลบโดยอัตโนมัติหลังเสร็จสิ้นการแปล
               </p>
@@ -459,18 +482,22 @@ export default function TranslatePage() {
               <h2 className="font-semibold text-[#263F5D] text-sm">
                 ข้อความที่ได้ / พิมพ์ข้อความ
               </h2>
-              <span className={`text-xs font-medium ${wordCount >= maxWords ? 'text-red-500' : 'text-[#263F5D]/70'}`}>
+              <span
+                className={`text-xs font-medium ${
+                  wordCount >= maxWords ? 'text-red-500' : 'text-[#263F5D]/70'
+                }`}
+              >
                 {wordCount}/{maxWords}
               </span>
             </div>
+
             <Textarea
               value={text}
               onChange={handleTextChange}
               placeholder="ข้อความจะแสดงที่นี่หลังบันทึกเสียง หรือคุณสามารถพิมพ์ข้อความที่ต้องการได้"
               className="min-h-[100px] resize-none bg-white/50 border-2 border-[#223C55] text-[#263F5D] placeholder:text-[#263F5D]/50 text-sm"
             />
-            
-            {/* Submit Button inside the text box */}
+
             <Button
               onClick={handleSubmit}
               size="lg"
@@ -494,8 +521,11 @@ export default function TranslatePage() {
       <Dialog open={showUploadModal} onOpenChange={setShowUploadModal}>
         <DialogContent className="sm:max-w-md bg-white dark:bg-[#1a2f44]">
           <DialogHeader>
-            <DialogTitle className="text-[#263F5D] dark:text-white">อัพโหลดไฟล์</DialogTitle>
+            <DialogTitle className="text-[#263F5D] dark:text-white">
+              อัพโหลดไฟล์
+            </DialogTitle>
           </DialogHeader>
+
           <div className="flex flex-col items-center py-8 border-2 border-dashed border-[#223C55] dark:border-white/20 rounded-lg bg-[#A6BFE3]/30">
             <Upload size={40} className="text-[#263F5D]/40 mb-4" />
             <p className="text-[#263F5D]/60 mb-2 text-sm">วางไฟล์ที่นี่ หรือ</p>
@@ -506,6 +536,7 @@ export default function TranslatePage() {
             >
               อัพโหลดไฟล์
             </Button>
+
             <input
               ref={fileInputRef}
               type="file"
@@ -518,7 +549,10 @@ export default function TranslatePage() {
       </Dialog>
 
       {/* Summarize Error Modal */}
-      <Dialog open={showSummarizeErrorModal} onOpenChange={setShowSummarizeErrorModal}>
+      <Dialog
+        open={showSummarizeErrorModal}
+        onOpenChange={setShowSummarizeErrorModal}
+      >
         <DialogContent className="sm:max-w-md text-center bg-white dark:bg-[#1a2f44]">
           <div className="py-6">
             <div className="text-5xl mb-4">📝</div>
