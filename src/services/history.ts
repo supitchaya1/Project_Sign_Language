@@ -166,3 +166,34 @@ export async function deleteHistory(id: string) {
     throw new Error(error.message);
   }
 }
+
+export async function deleteManyHistory(ids: string[]) {
+  const user = await requireUser();
+
+  if (!ids.length) return;
+
+  const { error } = await supabase
+    .from("translation_history")
+    .delete()
+    .in("id", ids)
+    .eq("user_id", user.id);
+
+  if (error) {
+    console.error("deleteManyHistory error:", error);
+    throw new Error(error.message);
+  }
+}
+
+export async function deleteAllHistory() {
+  const user = await requireUser();
+
+  const { error } = await supabase
+    .from("translation_history")
+    .delete()
+    .eq("user_id", user.id);
+
+  if (error) {
+    console.error("deleteAllHistory error:", error);
+    throw new Error(error.message);
+  }
+}

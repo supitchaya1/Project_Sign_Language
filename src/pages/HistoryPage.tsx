@@ -5,7 +5,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/contexts/AuthContext";
 import { Link, useNavigate } from "react-router-dom";
-import { fetchMyHistory, deleteHistory, type HistoryRecord } from "@/services/history";
+import {
+  fetchMyHistory,
+  deleteHistory,
+  deleteManyHistory,
+  deleteAllHistory,
+  type HistoryRecord,
+} from "@/services/history";
 import {
   Dialog,
   DialogContent,
@@ -25,6 +31,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 type SortOrder = "newest" | "oldest";
+type DeleteMode = "single" | "selected" | "all";
 
 function safeTime(s?: string | null) {
   if (!s) return 0;
@@ -51,7 +58,10 @@ export default function HistoryPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
 
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteMode, setDeleteMode] = useState<DeleteMode>("single");
   const [itemToDelete, setItemToDelete] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -60,6 +70,7 @@ export default function HistoryPage() {
       setIsLoading(false);
       setItems([]);
       setErrorMessage(null);
+      setSelectedIds([]);
       return;
     }
 
@@ -118,8 +129,6 @@ export default function HistoryPage() {
       return sortOrder === "newest" ? tb - ta : ta - tb;
     });
 
-    // กันซ้ำบนหน้าแสดงผลอีกชั้น
-    // ถ้าซ้ำกันจะเหลือแค่รายการแรกตามลำดับ sort ที่เลือก
     const seen = new Set<string>();
     const deduped: HistoryRecord[] = [];
 
@@ -133,22 +142,97 @@ export default function HistoryPage() {
     return deduped;
   }, [items, searchQuery, sortOrder]);
 
+  const filteredIds = useMemo(() => filteredItems.map((item) => item.id), [filteredItems]);
+
+  const selectedCount = selectedIds.length;
+  const hasSelection = selectedCount > 0;
+
+  const isAllFilteredSelected =
+    filteredIds.length > 0 && filteredIds.every((id) => selectedIds.includes(id));
+
+  const toggleSelectOne = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAllFiltered = () => {
+    setSelectedIds((prev) => {
+      if (isAllFilteredSelected) {
+        return prev.filter((id) => !filteredIds.includes(id));
+      }
+
+      const merged = new Set([...prev, ...filteredIds]);
+      return Array.from(merged);
+    });
+  };
+
   const handleDelete = (id: string) => {
+    setDeleteMode("single");
     setItemToDelete(id);
     setShowDeleteModal(true);
   };
 
-  const confirmDelete = async () => {
-    if (!itemToDelete) return;
+  const handleDeleteSelected = () => {
+    if (selectedIds.length === 0) {
+      toast.error("กรุณาเลือกรายการที่ต้องการลบ");
+      return;
+    }
 
+    setDeleteMode("selected");
+    setItemToDelete(null);
+    setShowDeleteModal(true);
+  };
+
+  const handleDeleteAll = () => {
+    if (items.length === 0) {
+      toast.error("ยังไม่มีประวัติให้ลบ");
+      return;
+    }
+
+    setDeleteMode("all");
+    setItemToDelete(null);
+    setShowDeleteModal(true);
+  };
+
+  const handleBulkDelete = () => {
+    if (hasSelection) {
+      handleDeleteSelected();
+      return;
+    }
+
+    handleDeleteAll();
+  };
+
+  const confirmDelete = async () => {
     setIsDeleting(true);
 
     try {
-      await deleteHistory(itemToDelete);
+      if (deleteMode === "single") {
+        if (!itemToDelete) return;
 
-      setItems((prev) => prev.filter((x) => x.id !== itemToDelete));
+        await deleteHistory(itemToDelete);
+        setItems((prev) => prev.filter((x) => x.id !== itemToDelete));
+        setSelectedIds((prev) => prev.filter((id) => id !== itemToDelete));
+        toast.success("ลบประวัติสำเร็จ");
+      }
 
-      toast.success("ลบประวัติสำเร็จ");
+      if (deleteMode === "selected") {
+        if (selectedIds.length === 0) return;
+
+        await deleteManyHistory(selectedIds);
+        setItems((prev) => prev.filter((x) => !selectedIds.includes(x.id)));
+        setSelectedIds([]);
+        toast.success(`ลบประวัติที่เลือก ${selectedIds.length} รายการสำเร็จ`);
+      }
+
+      if (deleteMode === "all") {
+        await deleteAllHistory();
+        setItems([]);
+        setSelectedIds([]);
+        toast.success("ลบประวัติทั้งหมดสำเร็จ");
+      }
+
       setShowDeleteModal(false);
       setItemToDelete(null);
     } catch (err: unknown) {
@@ -178,6 +262,18 @@ export default function HistoryPage() {
         },
       },
     });
+  };
+
+  const getDeleteDialogText = () => {
+    if (deleteMode === "single") {
+      return "คุณต้องการลบประวัตินี้หรือไม่? การกระทำนี้ไม่สามารถย้อนกลับได้";
+    }
+
+    if (deleteMode === "selected") {
+      return `คุณต้องการลบประวัติที่เลือก ${selectedCount} รายการหรือไม่? การกระทำนี้ไม่สามารถย้อนกลับได้`;
+    }
+
+    return "คุณต้องการลบประวัติทั้งหมดหรือไม่? การกระทำนี้ไม่สามารถย้อนกลับได้";
   };
 
   if (!isAuthenticated) {
@@ -253,7 +349,7 @@ export default function HistoryPage() {
         >
           <h2 className="font-semibold text-[#263F5D] mb-3 text-sm">ค้นหาและคัดกรอง</h2>
 
-          <div className="flex gap-3">
+          <div className="flex gap-3 mb-4">
             <div className="relative flex-1">
               <Search
                 size={16}
@@ -273,7 +369,7 @@ export default function HistoryPage() {
                   type="button"
                   variant="outline"
                   size="icon"
-                  className="border-2 border-[#223C55] text-[#263F5D] bg-white/50 hover:bg-white/70"
+                  className="border-2 border-[#223C55] text-[#263F5D] bg-white/50 hover:bg-white/70 shrink-0"
                   aria-label="Filter"
                 >
                   <Filter size={16} />
@@ -300,6 +396,30 @@ export default function HistoryPage() {
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={toggleSelectAllFiltered}
+              disabled={filteredIds.length === 0}
+              className="border-2 border-[#223C55] text-[#263F5D] bg-white/50 hover:bg-white/70 disabled:opacity-50"
+            >
+              {isAllFilteredSelected ? "ยกเลิกเลือกทั้งหมด" : "เลือกทั้งหมด"}
+            </Button>
+
+            <div className="h-6 w-px bg-[#223C55]/20 mx-1 hidden sm:block" />
+
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={handleBulkDelete}
+              disabled={!hasSelection && items.length === 0}
+              className="disabled:opacity-50"
+            >
+              {hasSelection ? `ลบที่เลือก (${selectedCount})` : "ลบทั้งหมด"}
+            </Button>
+          </div>
         </motion.div>
 
         {isLoading ? (
@@ -310,64 +430,82 @@ export default function HistoryPage() {
           </div>
         ) : (
           <div className="space-y-3">
-            {filteredItems.map((item, index) => (
-              <motion.div
-                key={item.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.05 }}
-                className="border-2 border-[#223C55] dark:border-[#213B54] rounded-xl p-5 bg-[#A6BFE3]"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Calendar size={14} className="text-[#263F5D]/40 shrink-0" />
-                      <span className="text-xs text-[#263F5D]/60 break-all">
-                        {item.created_at ? new Date(item.created_at).toLocaleString() : "-"}
-                      </span>
+            {filteredItems.map((item, index) => {
+              const isChecked = selectedIds.includes(item.id);
+
+              return (
+                <motion.div
+                  key={item.id}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: index * 0.05 }}
+                  className={`border-2 rounded-xl p-5 bg-[#A6BFE3] ${
+                    isChecked
+                      ? "border-[#0F1F2F] dark:border-white"
+                      : "border-[#223C55] dark:border-[#213B54]"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex gap-3 flex-1 min-w-0">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => toggleSelectOne(item.id)}
+                        className="mt-1 h-4 w-4 shrink-0 accent-[#0F1F2F] cursor-pointer"
+                        aria-label={`เลือกรายการ ${item.id}`}
+                      />
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Calendar size={14} className="text-[#263F5D]/40 shrink-0" />
+                          <span className="text-xs text-[#263F5D]/60 break-all">
+                            {item.created_at ? new Date(item.created_at).toLocaleString() : "-"}
+                          </span>
+                        </div>
+
+                        <p className="text-[#263F5D] text-sm line-clamp-2 break-words">
+                          {item.input_text || "-"}
+                        </p>
+
+                        {!!item.translated_result && (
+                          <p className="text-xs mt-2 text-[#263F5D]/80 break-words">
+                            <span className="font-semibold">สรุปใจความ:</span>{" "}
+                            {normalizeText(item.translated_result).replace(/\s+/g, "")}
+                          </p>
+                        )}
+
+                        {!!item.keywords && (
+                          <p className="text-xs mt-1 text-[#263F5D]/70 break-words">
+                            <span className="font-semibold">คำสำคัญ:</span> {item.keywords}
+                          </p>
+                        )}
+                      </div>
                     </div>
 
-                    <p className="text-[#263F5D] text-sm line-clamp-2 break-words">
-                      {item.input_text || "-"}
-                    </p>
+                    <div className="flex gap-2 shrink-0">
+                      <Button
+                        size="sm"
+                        className="flex items-center gap-1 bg-[#0F1F2F] hover:bg-[#1a2f44] text-[#C9A7E3] text-xs px-3"
+                        onClick={() => handleViewVideo(item)}
+                      >
+                        <Eye size={12} />
+                        <span className="hidden sm:inline">ดูวิดีโอ</span>
+                      </Button>
 
-                    {!!item.translated_result && (
-                      <p className="text-xs mt-2 text-[#263F5D]/80 break-words">
-                        <span className="font-semibold">สรุปใจความ:</span>{" "}
-                        {normalizeText(item.translated_result).replace(/\s+/g, "")}
-                      </p>
-                    )}
-
-                    {!!item.keywords && (
-                      <p className="text-xs mt-1 text-[#263F5D]/70 break-words">
-                        <span className="font-semibold">คำสำคัญ:</span> {item.keywords}
-                      </p>
-                    )}
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => handleDelete(item.id)}
+                        className="flex items-center gap-1 text-xs px-3"
+                      >
+                        <Trash2 size={12} />
+                        <span className="hidden sm:inline">ลบ</span>
+                      </Button>
+                    </div>
                   </div>
-
-                  <div className="flex gap-2 shrink-0">
-                    <Button
-                      size="sm"
-                      className="flex items-center gap-1 bg-[#0F1F2F] hover:bg-[#1a2f44] text-[#C9A7E3] text-xs px-3"
-                      onClick={() => handleViewVideo(item)}
-                    >
-                      <Eye size={12} />
-                      <span className="hidden sm:inline">ดูวิดีโอ</span>
-                    </Button>
-
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => handleDelete(item.id)}
-                      className="flex items-center gap-1 text-xs px-3"
-                    >
-                      <Trash2 size={12} />
-                      <span className="hidden sm:inline">ลบ</span>
-                    </Button>
-                  </div>
-                </div>
-              </motion.div>
-            ))}
+                </motion.div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -382,7 +520,7 @@ export default function HistoryPage() {
 
           <div className="py-4 text-center">
             <p className="text-[#263F5D]/60 dark:text-white/60 text-sm">
-              คุณต้องการลบประวัตินี้หรือไม่? การกระทำนี้ไม่สามารถย้อนกลับได้
+              {getDeleteDialogText()}
             </p>
           </div>
 
