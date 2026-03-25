@@ -11,9 +11,6 @@ import { toast } from "sonner";
 import { THSL_RULES, Role as RuleRole, ThslRule } from "@/services/thslRules";
 import { saveHistory, type HistoryRecord } from "@/services/history";
 
-// ==========================================
-// 1) Backend URL + buildPoseUrl
-// ==========================================
 const BACKEND_URL =
   (import.meta.env.VITE_BACKEND_BASE as string) || "http://127.0.0.1:8000";
 
@@ -28,9 +25,6 @@ function buildPoseUrl(filename: string) {
   return `${joinUrl(BACKEND_URL, "api/pose")}?name=${encodeURIComponent(clean)}`;
 }
 
-// ==========================================
-// 2) Interfaces
-// ==========================================
 interface ResultState {
   originalText?: string;
   summary?: string;
@@ -70,9 +64,6 @@ interface CategoryRoleRow {
   priority: number;
 }
 
-// ==========================================
-// 3) Utils
-// ==========================================
 function normalizeThaiToken(s: string) {
   return (s ?? "").replace(/\u200B|\u200C|\u200D|\uFEFF/g, "").trim();
 }
@@ -149,9 +140,6 @@ function dropSubTokens(tokens: string[]) {
   return tks.filter((t) => keptSet.has(t));
 }
 
-// ==========================================
-// 4) Rule engine
-// ==========================================
 function normalizeDbRoleToRuleRole(dbRole: string): RuleRole {
   const r = (dbRole ?? "").trim();
   if (r === "Q") return "Q(?)";
@@ -224,9 +212,6 @@ function reorderByRule(
   return out.filter(Boolean);
 }
 
-// ==========================================
-// 5) Main Component
-// ==========================================
 export default function ResultPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -269,7 +254,8 @@ export default function ResultPage() {
                 .filter(Boolean)
             : []),
         thsl_fixed: state.resultData.thsl_fixed || "",
-        historyVideoUrl: state.resultData.sentenceVideoUrl || state.historyItem?.video_url || "",
+        historyVideoUrl:
+          state.resultData.sentenceVideoUrl || state.historyItem?.video_url || "",
       };
     }
 
@@ -292,14 +278,12 @@ export default function ResultPage() {
     setSentenceVideoUrl(url);
   };
 
-  // โหลดวิดีโอเดิมจาก history ถ้ามี
   useEffect(() => {
     if (isFromHistory && resultData.historyVideoUrl) {
       setSentenceVideoUrl(resultData.historyVideoUrl);
     }
   }, [isFromHistory, resultData.historyVideoUrl]);
 
-  // บันทึก history เฉพาะตอนมาจากหน้าแปลใหม่เท่านั้น
   useEffect(() => {
     if (savedOnceRef.current) return;
     if (isFromHistory) return;
@@ -337,10 +321,20 @@ export default function ResultPage() {
     const run = async () => {
       const summaryText = (resultData.summary ?? "").replace(/\s+/g, "").trim();
 
-      const kwTokens = uniqPreserveOrder(segmentThaiWords(summaryText));
+      const kwTokens = uniqPreserveOrder(
+        Array.isArray(resultData.keywords) && resultData.keywords.length > 0
+          ? resultData.keywords
+          : segmentThaiWords(summaryText)
+      );
       const fixedTokens = resultData.thsl_fixed?.trim()
-        ? cleanTokens(resultData.thsl_fixed.trim().split(/\s+/))
-        : [];
+      ? cleanTokens(
+        /\s/.test(resultData.thsl_fixed.trim())
+          ? resultData.thsl_fixed.trim().split(/\s+/)
+          : Array.isArray(resultData.keywords) && resultData.keywords.length > 0
+          ? resultData.keywords
+          : [resultData.thsl_fixed.trim()]
+      )
+      : [];
 
       if (fixedTokens.length === 0 && kwTokens.length === 0 && !summaryText) {
         if (cancelled) return;
@@ -437,12 +431,17 @@ export default function ResultPage() {
               const normTok = normalizeThaiToken(tok);
               if (!normTok || seen.has(normTok)) continue;
 
-              const candidates = rows.filter((r) => normalizeThaiToken(r.word) === normTok);
+              const candidates = rows.filter(
+                (r) => normalizeThaiToken(r.word) === normTok
+              );
               if (candidates.length === 0) continue;
 
               const best = candidates
                 .slice()
-                .sort((a, b) => getRole(a.category).priority - getRole(b.category).priority)[0];
+                .sort(
+                  (a, b) =>
+                    getRole(a.category).priority - getRole(b.category).priority
+                )[0];
 
               const role = getRole(best.category).role;
               if (IMPORTANT_ROLES.has(role)) {
@@ -591,7 +590,9 @@ export default function ResultPage() {
       }
 
       try {
-        const filenames = processed.map((x) => (x.pose_filename ?? "").trim()).filter(Boolean);
+        const filenames = processed
+          .map((x) => (x.pose_filename ?? "").trim())
+          .filter(Boolean);
 
         if (filenames.length === 0) {
           if (cancelled) return;
@@ -603,7 +604,10 @@ export default function ResultPage() {
         const resp = await fetch(joinUrl(BACKEND_URL, "api/concat_video"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pose_filenames: filenames, output_name: "sentence.mp4" }),
+          body: JSON.stringify({
+            pose_filenames: filenames,
+            output_name: "sentence.mp4",
+          }),
           signal: abort.signal,
         });
 
@@ -649,6 +653,7 @@ export default function ResultPage() {
     resultData.historyVideoUrl,
     resultData.summary,
     resultData.thsl_fixed,
+    resultData.keywords,
   ]);
 
   const handleDownloadSentenceVideo = () => {

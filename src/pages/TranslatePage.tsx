@@ -11,7 +11,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-// import { supabase } from '@/integrations/supabase/client';
 import { supabase } from "@/lib/supabase";
 
 declare namespace Intl {
@@ -89,12 +88,22 @@ export default function TranslatePage() {
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [text, setText] = useState('');
 
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [showSummarizeErrorModal, setShowSummarizeErrorModal] = useState(false);
+  const [isProcessingFile, setIsProcessingFile] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+
   const state = (location.state as TranslatePageLocationState | null) ?? null;
 
   const segmenter =
     typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
       ? new Intl.Segmenter('th', { granularity: 'word' })
       : null;
+
+  const maxWords = 150;
 
   const getWordCount = (str: string) => {
     const s = str.trim();
@@ -108,11 +117,10 @@ export default function TranslatePage() {
       return count;
     }
 
-    // fallback ถ้า browser ไม่มี Segmenter
     return s.split(/\s+/).filter(Boolean).length;
   };
 
-  const clampToMaxWords = (input: string, maxWords: number) => {
+  const clampToMaxWords = (input: string, limit: number) => {
     const s = input.trim();
     if (!s) return '';
 
@@ -123,19 +131,33 @@ export default function TranslatePage() {
       for (const part of segmenter.segment(s)) {
         const isWord = !!part.isWordLike;
         if (isWord) {
-          if (count >= maxWords) break;
+          if (count >= limit) break;
           count++;
         }
         out += part.segment;
       }
+
       return out.trim();
     }
 
-    return s.split(/\s+/).slice(0, maxWords).join(' ');
+    return s.split(/\s+/).slice(0, limit).join(' ');
+  };
+
+  const extractDirectKeywords = (input: string) => {
+    const s = input.trim();
+    if (!s) return [];
+
+    if (segmenter) {
+      return Array.from(segmenter.segment(s))
+        .filter((part) => part.isWordLike)
+        .map((part) => part.segment.trim())
+        .filter(Boolean);
+    }
+
+    return s.split(/\s+/).filter(Boolean);
   };
 
   const wordCount = getWordCount(text);
-  const maxWords = 150;
 
   useEffect(() => {
     const incomingText = state?.originalText?.trim();
@@ -144,25 +166,19 @@ export default function TranslatePage() {
     const clamped = clampToMaxWords(incomingText, maxWords);
     setText(clamped);
 
-    // ล้าง state ทิ้ง เพื่อไม่ให้ข้อความเดิมติดค้างเมื่อเข้าหน้านี้รอบถัดไป
     navigate(location.pathname, { replace: true, state: null });
-  }, [state?.originalText, maxWords, navigate, location.pathname]);
+  }, [state?.originalText, navigate, location.pathname]);
 
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newText = e.target.value;
     const clamped = clampToMaxWords(newText, maxWords);
 
-    if (clamped !== newText) toast.warning(`เกินขีดจำกัด ${maxWords} คำ`);
+    if (clamped !== newText) {
+      toast.warning(`เกินขีดจำกัด ${maxWords} คำ`);
+    }
+
     setText(clamped);
   };
-
-  const [showUploadModal, setShowUploadModal] = useState(false);
-  const [showSummarizeErrorModal, setShowSummarizeErrorModal] = useState(false);
-  const [isProcessingFile, setIsProcessingFile] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
 
   useEffect(() => {
     const SpeechRecognitionAPI =
@@ -176,14 +192,11 @@ export default function TranslatePage() {
 
       recognition.onresult = (event: SpeechRecognitionEvent) => {
         let finalTranscript = '';
-        let interimTranscript = '';
 
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const transcript = event.results[i][0].transcript;
           if (event.results[i].isFinal) {
             finalTranscript += transcript;
-          } else {
-            interimTranscript += transcript;
           }
         }
 
@@ -192,7 +205,11 @@ export default function TranslatePage() {
             const separator = prev && !prev.endsWith(' ') ? ' ' : '';
             const next = prev + separator + finalTranscript.trim();
             const clamped = clampToMaxWords(next, maxWords);
-            if (clamped !== next) toast.warning(`เกินขีดจำกัด ${maxWords} คำ`);
+
+            if (clamped !== next) {
+              toast.warning(`เกินขีดจำกัด ${maxWords} คำ`);
+            }
+
             return clamped;
           });
         }
@@ -221,7 +238,7 @@ export default function TranslatePage() {
         recognitionRef.current.abort();
       }
     };
-  }, [maxWords]);
+  }, []);
 
   const handleStartRecording = () => {
     if (!recognitionRef.current) {
@@ -249,11 +266,11 @@ export default function TranslatePage() {
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      setAudioFile(file);
-      setShowUploadModal(false);
-      await transcribeAudioFile(file);
-    }
+    if (!file) return;
+
+    setAudioFile(file);
+    setShowUploadModal(false);
+    await transcribeAudioFile(file);
   };
 
   const transcribeAudioFile = async (file: File) => {
@@ -294,9 +311,14 @@ export default function TranslatePage() {
         setText((prev) => {
           const next = prev + (prev ? ' ' : '') + data.text;
           const clamped = clampToMaxWords(next, maxWords);
-          if (clamped !== next) toast.warning(`เกินขีดจำกัด ${maxWords} คำ`);
+
+          if (clamped !== next) {
+            toast.warning(`เกินขีดจำกัด ${maxWords} คำ`);
+          }
+
           return clamped;
         });
+
         toast.success('แปลงไฟล์เสียงเป็นข้อความสำเร็จ');
       } else {
         toast.warning('ไม่พบข้อความในไฟล์เสียง');
@@ -312,8 +334,27 @@ export default function TranslatePage() {
   };
 
   const handleSubmit = async () => {
-    if (!text.trim()) {
+    const raw = text.trim();
+
+    if (!raw) {
       toast.error('กรุณาบันทึกเสียงหรือพิมพ์ข้อความก่อน');
+      return;
+    }
+
+    const inputWordCount = getWordCount(raw);
+
+    // 1–2 คำ: ส่งตรง ไม่เรียก summarize
+    if (inputWordCount <= 2) {
+      const directKeywords = extractDirectKeywords(raw);
+
+      navigate('/result', {
+        state: {
+          originalText: raw,
+          summary: raw,
+          thsl_fixed: raw,
+          keywords: directKeywords,
+        },
+      });
       return;
     }
 
@@ -322,7 +363,7 @@ export default function TranslatePage() {
 
     try {
       const { data, error } = await supabase.functions.invoke('summarize-text', {
-        body: { text: text.trim() },
+        body: { text: raw },
       });
 
       if (error) {
@@ -342,7 +383,7 @@ export default function TranslatePage() {
 
       navigate('/result', {
         state: {
-          originalText: text.trim(),
+          originalText: raw,
           summary: data.summary,
           thsl_fixed: data.thsl_fixed,
           keywords: data.keywords ?? [],
@@ -369,7 +410,6 @@ export default function TranslatePage() {
         </motion.h1>
 
         <div className="space-y-4">
-          {/* Voice Recording Section */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -421,7 +461,6 @@ export default function TranslatePage() {
             </div>
           </motion.div>
 
-          {/* File Upload Section */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -471,7 +510,6 @@ export default function TranslatePage() {
             </div>
           </motion.div>
 
-          {/* Text Input Section */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -517,7 +555,6 @@ export default function TranslatePage() {
         </div>
       </div>
 
-      {/* Upload Modal */}
       <Dialog open={showUploadModal} onOpenChange={setShowUploadModal}>
         <DialogContent className="sm:max-w-md bg-white dark:bg-[#1a2f44]">
           <DialogHeader>
@@ -548,7 +585,6 @@ export default function TranslatePage() {
         </DialogContent>
       </Dialog>
 
-      {/* Summarize Error Modal */}
       <Dialog
         open={showSummarizeErrorModal}
         onOpenChange={setShowSummarizeErrorModal}
