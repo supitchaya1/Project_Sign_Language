@@ -1,9 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 import { Pose } from "pose-format";
 
+type Emotion =
+  | "neutral"
+  | "happy"
+  | "sad"
+  | "angry"
+  | "surprised"
+  | "question";
+
+type PlaylistItem = {
+  url: string;
+  label?: string;
+  emotion?: Emotion;
+};
+
 type Props = {
   poseUrl?: string;
   poseUrls?: string[];
+  items?: PlaylistItem[];
+
   width?: number;
   height?: number;
   autoPlay?: boolean;
@@ -12,9 +28,19 @@ type Props = {
   loopPlaylist?: boolean;
   loopPose?: boolean;
   flipY?: boolean;
+
+  emotion?: Emotion;
 };
 
 type Point = { x: number; y: number; z: number; c: number };
+
+type FaceStyle = {
+  browTilt: number;
+  browLift: number;
+  eyeOpen: number;
+  mouthCurve: number;
+  mouthOpen: number;
+};
 
 const COLORS = {
   bg1: "#0B1B2A",
@@ -24,7 +50,6 @@ const COLORS = {
   torso: "#5AA7FF",
 
   head: "#FFD84D",
-  /* head: "#fbe1ceff", */
   cheek: "rgba(255,120,170,0.22)",
 
   eye: "#0B0F14",
@@ -59,7 +84,6 @@ const POSE_EDGES: Array<[number, number]> = [
   [26, 28],
 ];
 
-// เพิ่มเท้า/ส้นเท้า ลด “ขาขาด”
 const POSE_EXTRA_EDGES: Array<[number, number]> = [
   [27, 31],
   [28, 32],
@@ -69,7 +93,6 @@ const POSE_EXTRA_EDGES: Array<[number, number]> = [
   [30, 32],
 ];
 
-// hands (21 points)
 const HAND_PALM_EDGES: Array<[number, number]> = [
   [0, 1],
   [0, 5],
@@ -106,7 +129,6 @@ const PINKY_EDGES: Array<[number, number]> = [
   [19, 20],
 ];
 
-// ---------- utils ----------
 const clamp = (v: number, a: number, b: number) => Math.min(Math.max(v, a), b);
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const lerpPoint = (a: Point, b: Point, t: number): Point => ({
@@ -120,24 +142,6 @@ const hypot2 = (ax: number, ay: number, bx: number, by: number) =>
 
 function isValidPoint(p?: Point, thr = 0.05) {
   return !!p && p.c >= thr && !(p.x === 0 && p.y === 0);
-}
-
-function roundRectPath(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number
-) {
-  const rr = Math.max(0, Math.min(r, Math.min(w, h) / 2));
-  ctx.beginPath();
-  ctx.moveTo(x + rr, y);
-  ctx.arcTo(x + w, y, x + w, y + h, rr);
-  ctx.arcTo(x + w, y + h, x, y + h, rr);
-  ctx.arcTo(x, y + h, x, y, rr);
-  ctx.arcTo(x, y, x + w, y, rr);
-  ctx.closePath();
 }
 
 type ViewMode = "FULL" | "UPPER" | "HEAD_TORSO";
@@ -158,15 +162,68 @@ function getBBoxIndices(mode: ViewMode) {
     idx.push(23, 24);
   }
 
-  // hands always included
   for (let i = 501; i <= 542; i++) idx.push(i);
 
   return Array.from(new Set(idx));
 }
 
+function getFaceStyle(emotion: Emotion): FaceStyle {
+  switch (emotion) {
+    case "happy":
+      return {
+        browTilt: -1.5,
+        browLift: 0,
+        eyeOpen: 0.95,
+        mouthCurve: 8,
+        mouthOpen: 2,
+      };
+    case "sad":
+      return {
+        browTilt: 2.5,
+        browLift: 2,
+        eyeOpen: 0.72,
+        mouthCurve: -7,
+        mouthOpen: 1.5,
+      };
+    case "angry":
+      return {
+        browTilt: 5.5,
+        browLift: -2,
+        eyeOpen: 0.68,
+        mouthCurve: -3,
+        mouthOpen: 1,
+      };
+    case "surprised":
+      return {
+        browTilt: 0,
+        browLift: 5,
+        eyeOpen: 1.2,
+        mouthCurve: 0,
+        mouthOpen: 8,
+      };
+    case "question":
+      return {
+        browTilt: -3,
+        browLift: 3,
+        eyeOpen: 1,
+        mouthCurve: 1,
+        mouthOpen: 2.5,
+      };
+    default:
+      return {
+        browTilt: 0,
+        browLift: 0,
+        eyeOpen: 1,
+        mouthCurve: 3.5,
+        mouthOpen: 1.2,
+      };
+  }
+}
+
 export default function PosePlayer({
   poseUrl,
   poseUrls,
+  items,
   width = 640,
   height = 360,
   autoPlay = true,
@@ -175,63 +232,79 @@ export default function PosePlayer({
   loopPlaylist = false,
   loopPose = true,
   flipY = false,
+  emotion = "neutral",
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [playlist, setPlaylist] = useState<string[]>([]);
+  const [playlistItems, setPlaylistItems] = useState<PlaylistItem[]>([]);
   const [currentUrlIndex, setCurrentUrlIndex] = useState(0);
 
   const [frames, setFrames] = useState<Point[][]>([]);
   const [err, setErr] = useState("");
   const [playing, setPlaying] = useState(autoPlay);
 
-  // ✅ UI/Options
   const [panelOpen, setPanelOpen] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("FULL");
   const [showFingerColors, setShowFingerColors] = useState(true);
-
-  // ✅ ลดสั่น: ล็อกกล้อง (นิ่งสุด)
   const [lockCamera, setLockCamera] = useState(true);
 
-  // smooth playback
   const posRef = useRef(0);
   const reqIdRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
 
-  // smoothing / hold points
   const smoothPtsRef = useRef<Point[] | null>(null);
 
-  // Stable camera bbox (hysteresis)
-  const bboxRef = useRef<{ minX: number; maxX: number; minY: number; maxY: number } | null>(null);
-  const camInitRef = useRef<boolean>(false);
+  const bboxRef = useRef<{
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+  } | null>(null);
 
-  const resetCamera = () => {
-    bboxRef.current = null;
-    camInitRef.current = false;
-  };
-  // รีเซ็ตกล้องเมื่อสลับ FULL/UPPER หรือเปลี่ยนคลิป
-  useEffect(() => {
-    bboxRef.current = null;
-    camInitRef.current = false;
-  }, [viewMode, currentUrlIndex]);
-
-  // anchor hands to wrists
-  const handAnchorRef = useRef<{ L: { dx: number; dy: number }; R: { dx: number; dy: number } }>({
+  const handAnchorRef = useRef<{
+    L: { dx: number; dy: number };
+    R: { dx: number; dy: number };
+  }>({
     L: { dx: 0, dy: 0 },
     R: { dx: 0, dy: 0 },
   });
 
+  const resetCamera = () => {
+    bboxRef.current = null;
+  };
+
   useEffect(() => {
+    bboxRef.current = null;
+  }, [viewMode, currentUrlIndex]);
+
+  useEffect(() => {
+    if (items && items.length > 0) {
+      setPlaylistItems(items);
+      setPlaylist(items.map((x) => x.url));
+      setCurrentUrlIndex(0);
+      return;
+    }
+
     if (poseUrl) {
+      setPlaylistItems([{ url: poseUrl, emotion }]);
       setPlaylist([poseUrl]);
       setCurrentUrlIndex(0);
-    } else if (poseUrls && poseUrls.length > 0) {
+      return;
+    }
+
+    if (poseUrls && poseUrls.length > 0) {
+      const mapped = poseUrls.map((url) => ({ url, emotion }));
+      setPlaylistItems(mapped);
       setPlaylist(poseUrls);
       setCurrentUrlIndex(0);
-    } else {
-      setPlaylist([]);
+      return;
     }
-  }, [poseUrl, poseUrls]);
+
+    setPlaylistItems([]);
+    setPlaylist([]);
+    setCurrentUrlIndex(0);
+  }, [poseUrl, poseUrls, items, emotion]);
 
   useEffect(() => {
     let active = true;
@@ -245,7 +318,6 @@ export default function PosePlayer({
       posRef.current = 0;
       smoothPtsRef.current = null;
       bboxRef.current = null;
-      camInitRef.current = false;
       handAnchorRef.current = { L: { dx: 0, dy: 0 }, R: { dx: 0, dy: 0 } };
 
       try {
@@ -253,7 +325,9 @@ export default function PosePlayer({
 
         const headerComps: any[] = pose?.header?.components ?? [];
         const bodyFrames: any[] = pose?.body?.frames ?? [];
-        if (!bodyFrames?.length) throw new Error("ไฟล์ไม่มีเฟรม หรืออ่าน pose ไม่สำเร็จ");
+        if (!bodyFrames?.length) {
+          throw new Error("ไฟล์ไม่มีเฟรม หรืออ่าน pose ไม่สำเร็จ");
+        }
 
         const parsed: Point[][] = [];
 
@@ -279,15 +353,21 @@ export default function PosePlayer({
         }
 
         if (!active) return;
-        if (parsed.length === 0) throw new Error("อ่านข้อมูลไม่สำเร็จ (parsedFrames=0)");
+        if (parsed.length === 0) {
+          throw new Error("อ่านข้อมูลไม่สำเร็จ (parsedFrames=0)");
+        }
+
         setFrames(parsed);
       } catch (e) {
         console.error(e);
-        if (active) setErr(e instanceof Error ? e.message : "Error loading file");
+        if (active) {
+          setErr(e instanceof Error ? e.message : "Error loading file");
+        }
       }
     };
 
     loadPose();
+
     return () => {
       active = false;
     };
@@ -319,16 +399,19 @@ export default function PosePlayer({
             posRef.current = 0;
             return;
           }
+
           if (loopPlaylist) {
             setCurrentUrlIndex(0);
             posRef.current = 0;
             return;
           }
+
           posRef.current = maxIndex;
           if (playing) setPlaying(false);
         } else {
-          if (loopPose) posRef.current = 0;
-          else {
+          if (loopPose) {
+            posRef.current = 0;
+          } else {
             posRef.current = maxIndex;
             if (playing) setPlaying(false);
           }
@@ -346,7 +429,6 @@ export default function PosePlayer({
       const interp: Point[] = new Array(n);
       for (let i = 0; i < n; i++) interp[i] = lerpPoint(a[i], b[i], t);
 
-      // smooth + hold ลดขาดๆ/กระตุก (ทำให้ดูไม่สั่นด้วย)
       const prev = smoothPtsRef.current;
       if (!prev || prev.length !== interp.length) {
         smoothPtsRef.current = interp;
@@ -355,13 +437,13 @@ export default function PosePlayer({
           const cur = interp[i];
           const p = prev[i];
 
-          const isHand = i >= 501;               // 501-542 คือมือ
-          const a = isHand ? 0.08 : 0.22;        // ✅ มือช้าลง / ลำตัวพอดีๆ
+          const isHand = i >= 501;
+          const alpha = isHand ? 0.08 : 0.22;
 
-          const invalid = cur.c < confThreshold * 0.65 || (cur.x === 0 && cur.y === 0);
+          const invalid =
+            cur.c < confThreshold * 0.65 || (cur.x === 0 && cur.y === 0);
 
           if (invalid) {
-            // ✅ hold + ดัน confidence ให้เส้นไม่หาย
             const held = { ...p, c: Math.max(p.c, confThreshold * 0.95) };
             prev[i] = held;
             interp[i] = held;
@@ -369,15 +451,18 @@ export default function PosePlayer({
           }
 
           const next = {
-            x: p.x + (cur.x - p.x) * a,
-            y: p.y + (cur.y - p.y) * a,
-            z: p.z + (cur.z - p.z) * a,
-            c: p.c + (cur.c - p.c) * a,
+            x: p.x + (cur.x - p.x) * alpha,
+            y: p.y + (cur.y - p.y) * alpha,
+            z: p.z + (cur.z - p.z) * alpha,
+            c: p.c + (cur.c - p.c) * alpha,
           };
           prev[i] = next;
           interp[i] = next;
         }
       }
+
+      const activeEmotion =
+        playlistItems[currentUrlIndex]?.emotion ?? emotion ?? "neutral";
 
       drawSkeleton(
         ctx,
@@ -388,7 +473,8 @@ export default function PosePlayer({
         flipY,
         viewMode,
         showFingerColors,
-        lockCamera
+        lockCamera,
+        activeEmotion
       );
     };
 
@@ -407,9 +493,15 @@ export default function PosePlayer({
     viewMode,
     showFingerColors,
     lockCamera,
+    emotion,
+    playlistItems,
   ]);
 
-  const drawBgGradient = (ctx: CanvasRenderingContext2D, cw: number, ch: number) => {
+  const drawBgGradient = (
+    ctx: CanvasRenderingContext2D,
+    cw: number,
+    ch: number
+  ) => {
     const g = ctx.createLinearGradient(0, 0, 0, ch);
     g.addColorStop(0, COLORS.bg1);
     g.addColorStop(1, COLORS.bg2);
@@ -431,6 +523,7 @@ export default function PosePlayer({
     ctx.lineJoin = "round";
 
     const thr = threshold * 0.55;
+
     for (const [a, b] of edges) {
       const pa = pts[a];
       const pb = pts[b];
@@ -467,7 +560,8 @@ export default function PosePlayer({
     fill: string,
     r: number
   ) => {
-    const thr = threshold * 0.70;
+    const thr = threshold * 0.7;
+
     for (const i of indices) {
       const p = pts[i];
       if (!isValidPoint(p, thr)) continue;
@@ -496,18 +590,18 @@ export default function PosePlayer({
     flip: boolean,
     mode: ViewMode,
     fingerColorsOn: boolean,
-    lockCam: boolean
+    lockCam: boolean,
+    activeEmotion: Emotion
   ) => {
     ctx.clearRect(0, 0, cw, ch);
     drawBgGradient(ctx, cw, ch);
 
-    // ---- stable bbox ----
     const indicesForBBox = getBBoxIndices(mode);
 
-    let minX = Infinity,
-      maxX = -Infinity,
-      minY = Infinity,
-      maxY = -Infinity;
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
 
     const thrBBox = threshold * 0.65;
 
@@ -519,43 +613,39 @@ export default function PosePlayer({
       minY = Math.min(minY, p.y);
       maxY = Math.max(maxY, p.y);
     }
+
     if (!isFinite(minX)) return;
 
-    const paddingPx = Math.min(cw, ch) * 0.10; //ขนาดหัว ยิ่งต่ำ = หัวใหญ่
+    const paddingPx = Math.min(cw, ch) * 0.1;
 
     const prev = bboxRef.current;
-      if (!prev) {
-        bboxRef.current = { minX, maxX, minY, maxY };
-        camInitRef.current = true;
-      } else {
-        // ✅ ถ้าล็อกกล้อง: ไม่อัปเดต bbox อีกเลย => ไม่ซูมเข้า/ออก
-        if (lockCam) {
-          // do nothing (freeze bbox)
-        } else {
-          // ปกติ (ถ้าไม่ล็อก) ให้ตามตัวคนได้
-          const expandA = 0.25;
-          const shrinkA = 0.06;
+    if (!prev) {
+      bboxRef.current = { minX, maxX, minY, maxY };
+    } else if (!lockCam) {
+      const expandA = 0.25;
+      const shrinkA = 0.06;
 
-          const axMin = minX < prev.minX ? expandA : shrinkA;
-          const axMax = maxX > prev.maxX ? expandA : shrinkA;
-          const ayMin = minY < prev.minY ? expandA : shrinkA;
-          const ayMax = maxY > prev.maxY ? expandA : shrinkA;
+      const axMin = minX < prev.minX ? expandA : shrinkA;
+      const axMax = maxX > prev.maxX ? expandA : shrinkA;
+      const ayMin = minY < prev.minY ? expandA : shrinkA;
+      const ayMax = maxY > prev.maxY ? expandA : shrinkA;
 
-          prev.minX += (minX - prev.minX) * axMin;
-          prev.maxX += (maxX - prev.maxX) * axMax;
-          prev.minY += (minY - prev.minY) * ayMin;
-          prev.maxY += (maxY - prev.maxY) * ayMax;
-        }
-      }
+      prev.minX += (minX - prev.minX) * axMin;
+      prev.maxX += (maxX - prev.maxX) * axMax;
+      prev.minY += (minY - prev.minY) * ayMin;
+      prev.maxY += (maxY - prev.maxY) * ayMax;
+    }
 
     const bb = bboxRef.current!;
     const bodyW = Math.max(bb.maxX - bb.minX, 1e-6);
     const bodyH = Math.max(bb.maxY - bb.minY, 1e-6);
 
-    const rawScale = Math.min((cw - paddingPx * 2) / bodyW, (ch - paddingPx * 2) / bodyH);
+    const rawScale = Math.min(
+      (cw - paddingPx * 2) / bodyW,
+      (ch - paddingPx * 2) / bodyH
+    );
 
-    // ✅ clamp scale ให้ไม่สั่น (ช่วงล็อกกล้อง clamp แคบลง)
-    const minMul = lockCam ? 0.90 : 0.70;
+    const minMul = lockCam ? 0.9 : 0.7;
     const maxMul = lockCam ? 1.05 : 1.35;
 
     const cx = (bb.minX + bb.maxX) / 2;
@@ -568,12 +658,13 @@ export default function PosePlayer({
       return flip ? ch - yy : yy;
     };
 
-    // torso fill
     const torsoPts = [11, 12, 24, 23].map((i) => pts[i]);
     if (torsoPts.every((p) => isValidPoint(p, threshold * 0.65))) {
       ctx.beginPath();
       ctx.moveTo(toX(torsoPts[0]!.x), toY(torsoPts[0]!.y));
-      for (let i = 1; i < torsoPts.length; i++) ctx.lineTo(toX(torsoPts[i]!.x), toY(torsoPts[i]!.y));
+      for (let i = 1; i < torsoPts.length; i++) {
+        ctx.lineTo(toX(torsoPts[i]!.x), toY(torsoPts[i]!.y));
+      }
       ctx.closePath();
       ctx.fillStyle = COLORS.torso;
       ctx.globalAlpha = 0.16;
@@ -581,48 +672,81 @@ export default function PosePlayer({
       ctx.globalAlpha = 1;
     }
 
-    // body edges
-    drawEdges(ctx, pts, [...POSE_EDGES, ...POSE_EXTRA_EDGES], toX, toY, threshold, COLORS.bodyStroke, 7);
+    drawEdges(
+      ctx,
+      pts,
+      [...POSE_EDGES, ...POSE_EXTRA_EDGES],
+      toX,
+      toY,
+      threshold,
+      COLORS.bodyStroke,
+      7
+    );
 
-    // attach hands to wrists
+    const bodyJointIndices =
+      mode === "FULL"
+        ? [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+        : mode === "UPPER"
+        ? [11, 12, 13, 14, 15, 16, 23, 24]
+        : [0, 11, 12, 13, 14, 15, 16];
+
+    drawJoints(
+      ctx,
+      pts,
+      bodyJointIndices,
+      toX,
+      toY,
+      threshold,
+      COLORS.bodyStroke,
+      3.6
+    );
+
     const L_OFFSET = 501;
     const R_OFFSET = 522;
 
-    const applyHandAnchor = (offset: number, wristPoseIdx: number, side: "L" | "R") => {
+    const applyHandAnchor = (
+      offset: number,
+      wristPoseIdx: number,
+      side: "L" | "R"
+    ) => {
       const poseWrist = pts[wristPoseIdx];
       const handWrist = pts[offset + 0];
 
-      if (!isValidPoint(poseWrist, threshold * 0.65) || !isValidPoint(handWrist, threshold * 0.65)) return;
+      if (
+        !isValidPoint(poseWrist, threshold * 0.65) ||
+        !isValidPoint(handWrist, threshold * 0.65)
+      ) {
+        return;
+      }
 
       const dxRaw = poseWrist.x - handWrist.x;
       const dyRaw = poseWrist.y - handWrist.y;
 
-      const a = 0.12;
-      const prevA = handAnchorRef.current[side];
-      prevA.dx += (dxRaw - prevA.dx) * a;
-      prevA.dy += (dyRaw - prevA.dy) * a;
+      const alpha = 0.12;
+      const prevAnchor = handAnchorRef.current[side];
+      prevAnchor.dx += (dxRaw - prevAnchor.dx) * alpha;
+      prevAnchor.dy += (dyRaw - prevAnchor.dy) * alpha;
 
       for (let i = 0; i < 21; i++) {
-        const hp = pts[offset + i];
-        if (!hp) continue;
-        pts[offset + i] = { ...hp, x: hp.x + prevA.dx, y: hp.y + prevA.dy };
+        const p = pts[offset + i];
+        if (!p) continue;
+        p.x += prevAnchor.dx;
+        p.y += prevAnchor.dy;
       }
     };
 
     applyHandAnchor(L_OFFSET, 15, "L");
     applyHandAnchor(R_OFFSET, 16, "R");
 
-    // hands
     const drawHand = (offset: number) => {
-      const wrist = pts[offset + 0];
-      if (!isValidPoint(wrist, threshold * 0.75)) return;
-
       const monoColor = COLORS.palm;
 
       drawEdges(
         ctx,
         pts,
-        HAND_PALM_EDGES.map(([a, b]) => [a + offset, b + offset] as [number, number]),
+        HAND_PALM_EDGES.map(
+          ([a, b]) => [a + offset, b + offset] as [number, number]
+        ),
         toX,
         toY,
         threshold,
@@ -643,10 +767,6 @@ export default function PosePlayer({
           stroke,
           4.8
         );
-
-        // * ข้อต่อนิ้ว
-        // const joints = Array.from(new Set(edges.flat())).map((i) => i + offset);
-        // drawJoints(ctx, pts, joints, toX, toY, threshold, stroke, 2.7);
       };
 
       drawFinger(THUMB_EDGES, COLORS.thumb);
@@ -656,10 +776,6 @@ export default function PosePlayer({
       drawFinger(PINKY_EDGES, COLORS.pinky);
     };
 
-    drawHand(L_OFFSET);
-    drawHand(R_OFFSET);
-
-    // face (คิ้วไม่ชนกัน)
     const nose = pts[0];
     const leftEye = pts[2];
     const rightEye = pts[5];
@@ -669,16 +785,25 @@ export default function PosePlayer({
     const rShoulder = pts[12];
 
     let headR = 18;
-    if (isValidPoint(lShoulder, threshold * 0.65) && isValidPoint(rShoulder, threshold * 0.65)) {
-      const shoulderDist = hypot2(lShoulder.x, lShoulder.y, rShoulder.x, rShoulder.y);
+    if (
+      isValidPoint(lShoulder, threshold * 0.65) &&
+      isValidPoint(rShoulder, threshold * 0.65)
+    ) {
+      const shoulderDist = hypot2(
+        lShoulder.x,
+        lShoulder.y,
+        rShoulder.x,
+        rShoulder.y
+      );
       headR = Math.max(18, (shoulderDist * scale) / 3.6);
     }
 
     if (isValidPoint(nose, threshold * 0.65)) {
+      const faceStyle = getFaceStyle(activeEmotion);
+
       const hx = toX(nose.x);
       const hy = toY(nose.y) - headR * 0.15;
 
-      // head
       ctx.beginPath();
       ctx.arc(hx, hy, headR, 0, Math.PI * 2);
       ctx.fillStyle = COLORS.head;
@@ -686,8 +811,9 @@ export default function PosePlayer({
 
       const getEyeXY = (pt?: Point) => {
         if (!isValidPoint(pt, threshold * 0.65)) return null;
-        return { x: toX(pt!.x), y: toY(pt!.y) };
+        return { x: toX(pt.x), y: toY(pt.y) };
       };
+
       const L = getEyeXY(leftEye);
       const R = getEyeXY(rightEye);
 
@@ -697,12 +823,28 @@ export default function PosePlayer({
         const ey = p.y;
 
         ctx.beginPath();
-        ctx.arc(ex, ey + 0.8, 7.0, 0, Math.PI * 2);
+        ctx.ellipse(
+          ex,
+          ey + 0.8,
+          7.0,
+          Math.max(2.2, 7.0 * faceStyle.eyeOpen),
+          0,
+          0,
+          Math.PI * 2
+        );
         ctx.fillStyle = COLORS.eyeShadow;
         ctx.fill();
 
         ctx.beginPath();
-        ctx.arc(ex, ey, 6.6, 0, Math.PI * 2);
+        ctx.ellipse(
+          ex,
+          ey,
+          6.6,
+          Math.max(2.2, 6.6 * faceStyle.eyeOpen),
+          0,
+          0,
+          Math.PI * 2
+        );
         ctx.fillStyle = COLORS.eyeWhite;
         ctx.fill();
 
@@ -720,40 +862,58 @@ export default function PosePlayer({
       drawEyeNice(L);
       drawEyeNice(R);
 
-      // cheeks (ไม่ติดตาล่าง)
       ctx.beginPath();
-      ctx.arc(hx - headR * 0.44, hy + headR * 0.34, headR * 0.16, 0, Math.PI * 2);
-      ctx.arc(hx + headR * 0.44, hy + headR * 0.34, headR * 0.16, 0, Math.PI * 2);
+      ctx.arc(
+        hx - headR * 0.44,
+        hy + headR * 0.34,
+        headR * 0.16,
+        0,
+        Math.PI * 2
+      );
+      ctx.arc(
+        hx + headR * 0.44,
+        hy + headR * 0.34,
+        headR * 0.16,
+        0,
+        Math.PI * 2
+      );
       ctx.fillStyle = COLORS.cheek;
       ctx.fill();
 
-      // brows (กันชนกันด้วย: จำกัดความยาวคิ้วตามระยะตา)
-      const drawBrowSoft = (p: { x: number; y: number } | null, other: { x: number; y: number } | null) => {
+      const drawBrowSoft = (
+        p: { x: number; y: number } | null,
+        other: { x: number; y: number } | null,
+        side: "L" | "R"
+      ) => {
         if (!p) return;
-        const bx = p.x;
-        const by = p.y - headR * 0.22;
 
-        // คุมความยาว: ถ้าตาใกล้กัน ให้คิ้วสั้นลง
+        const bx = p.x;
+        const by = p.y - headR * 0.22 - faceStyle.browLift;
+
         let halfLen = 11;
         if (p && other) {
           const eyeDist = Math.abs(other.x - p.x);
           halfLen = clamp(eyeDist * 0.28, 6, 11);
         }
 
+        const tilt = side === "L" ? faceStyle.browTilt : -faceStyle.browTilt;
+
         ctx.strokeStyle = COLORS.brow;
         ctx.lineWidth = 3.1;
         ctx.lineCap = "round";
         ctx.beginPath();
-        ctx.moveTo(bx - halfLen, by);
-        ctx.quadraticCurveTo(bx, by - 4.2, bx + halfLen, by);
+        ctx.moveTo(bx - halfLen, by + tilt);
+        ctx.quadraticCurveTo(bx, by - 4.2, bx + halfLen, by - tilt);
         ctx.stroke();
       };
 
-      drawBrowSoft(L, R);
-      drawBrowSoft(R, L);
+      drawBrowSoft(L, R, "L");
+      drawBrowSoft(R, L, "R");
 
-      // mouth
-      if (isValidPoint(mL, threshold * 0.65) && isValidPoint(mR, threshold * 0.65)) {
+      if (
+        isValidPoint(mL, threshold * 0.65) &&
+        isValidPoint(mR, threshold * 0.65)
+      ) {
         const mx1 = toX(mL.x);
         const my1 = toY(mL.y);
         const mx2 = toX(mR.x);
@@ -762,39 +922,70 @@ export default function PosePlayer({
         const mouthCx = (mx1 + mx2) / 2;
         const mouthCy = (my1 + my2) / 2;
         const mouthW = Math.max(10, Math.hypot(mx2 - mx1, my2 - my1));
-        const smile = clamp(mouthW * 0.10, 3.5, 8);
+
+        const curve = faceStyle.mouthCurve;
+        const open = faceStyle.mouthOpen;
 
         ctx.strokeStyle = COLORS.mouthOutline;
         ctx.lineWidth = 5.5;
         ctx.lineCap = "round";
         ctx.beginPath();
         ctx.moveTo(mx1, my1);
-        ctx.quadraticCurveTo(mouthCx, mouthCy + smile, mx2, my2);
+        ctx.quadraticCurveTo(mouthCx, mouthCy + curve, mx2, my2);
         ctx.stroke();
 
         ctx.strokeStyle = COLORS.mouth;
         ctx.lineWidth = 3.6;
         ctx.beginPath();
         ctx.moveTo(mx1, my1);
-        ctx.quadraticCurveTo(mouthCx, mouthCy + smile, mx2, my2);
+        ctx.quadraticCurveTo(mouthCx, mouthCy + curve, mx2, my2);
         ctx.stroke();
+
+        if (open > 3) {
+          ctx.beginPath();
+          ctx.ellipse(
+            mouthCx,
+            mouthCy + curve * 0.35,
+            mouthW * 0.18,
+            open,
+            0,
+            0,
+            Math.PI * 2
+          );
+          ctx.fillStyle = "rgba(120,0,0,0.45)";
+          ctx.fill();
+        }
       }
     }
 
-    // ✅ สำคัญ: “เอาส่วนที่อยู่หลังปุ่มแถบข้างออก”
-    // ไม่วาด legend บน canvas แล้ว (ย้ายไปอยู่ในแถบข้าง)
-    // if (fingerColorsOn) drawLegend(ctx, cw, ch);
+    // วาดมือทีหลังสุด เพื่อให้มืออยู่ด้านหน้าของใบหน้า
+    drawHand(L_OFFSET);
+    drawHand(R_OFFSET);
   };
 
-  if (err) return <div className="text-red-400 text-xs p-4 bg-black/20 rounded">{err}</div>;
+  if (err) {
+    return (
+      <div className="text-red-400 text-xs p-4 bg-black/20 rounded">
+        {err}
+      </div>
+    );
+  }
+
+  const currentLabel = playlistItems[currentUrlIndex]?.label;
+  const currentEmotion =
+    playlistItems[currentUrlIndex]?.emotion ?? emotion ?? "neutral";
 
   return (
     <div className="relative w-full h-full">
-      {/* ===== Canvas area ===== */}
       <div className="w-full h-full flex flex-col items-center">
-        <canvas ref={canvasRef} width={width} height={height} className="rounded-lg shadow-lg bg-[#0F1F2F]" />
+        <canvas
+          ref={canvasRef}
+          width={width}
+          height={height}
+          className="rounded-lg shadow-lg bg-[#0F1F2F]"
+        />
 
-        <div className="flex gap-2 mt-2 items-center opacity-80 hover:opacity-100 transition-opacity">
+        <div className="flex gap-2 mt-2 items-center opacity-80 hover:opacity-100 transition-opacity flex-wrap justify-center">
           <button
             onClick={() => setPlaying(!playing)}
             className="text-[11px] bg-white/12 hover:bg-white/20 px-3 py-1.5 rounded-md text-white border border-white/10"
@@ -807,10 +998,19 @@ export default function PosePlayer({
               Sequence: {currentUrlIndex + 1}/{playlist.length}
             </span>
           )}
+
+          {currentLabel && (
+            <span className="text-[11px] text-white/75 bg-white/10 px-2 py-1 rounded-md border border-white/10">
+              คำ: {currentLabel}
+            </span>
+          )}
+
+          <span className="text-[11px] text-white/75 bg-white/10 px-2 py-1 rounded-md border border-white/10">
+            สีหน้า: {currentEmotion}
+          </span>
         </div>
       </div>
 
-      {/* ===== Toggle button (ชื่อดีขึ้น + ชัด) ===== */}
       <button
         onClick={() => setPanelOpen((v) => !v)}
         className="absolute top-3 right-3 z-50 rounded-xl px-4 py-2 text-[12px] font-semibold
@@ -822,25 +1022,28 @@ export default function PosePlayer({
         {panelOpen ? "ซ่อนตัวเลือก" : "ตัวเลือก"}
       </button>
 
-      {/* ===== Side panel (ตอนปิด: ไม่รับคลิก/ไม่บังอะไร) ===== */}
       <div
         className={[
           "absolute top-0 right-0 h-full z-40",
           "transition-transform duration-200 ease-out",
-          panelOpen ? "translate-x-0 pointer-events-auto" : "translate-x-full pointer-events-none",
+          panelOpen
+            ? "translate-x-0 pointer-events-auto"
+            : "translate-x-full pointer-events-none",
         ].join(" ")}
         style={{ width: 320 }}
       >
-        <div className="h-full bg-black/55 backdrop-blur-md border-l border-white/10 p-3 pt-14 overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: "touch" }}>
+        <div
+          className="h-full bg-black/55 backdrop-blur-md border-l border-white/10 p-3 pt-14 overflow-y-auto overscroll-contain"
+          style={{ WebkitOverflowScrolling: "touch" }}
+        >
           <div className="flex items-center justify-between mb-2">
             <div className="text-white font-semibold text-sm">ตัวเลือก</div>
           </div>
 
-          {/* View mode buttons */}
           <div className="grid grid-cols-1 gap-2 mb-3">
             <button
               onClick={() => {
-                resetCamera();          // ✅ รีเซ็ตทุกครั้ง แม้กด FULL ซ้ำ
+                resetCamera();
                 setViewMode("FULL");
               }}
               className={[
@@ -855,7 +1058,7 @@ export default function PosePlayer({
 
             <button
               onClick={() => {
-                resetCamera();          // ✅ รีเซ็ตทุกครั้ง แม้กด UPPER ซ้ำ
+                resetCamera();
                 setViewMode("UPPER");
               }}
               className={[
@@ -867,22 +1070,51 @@ export default function PosePlayer({
             >
               ครึ่งตัวบน (หัวถึงเอว/สะโพก)
             </button>
+
+            <button
+              onClick={() => {
+                resetCamera();
+                setViewMode("HEAD_TORSO");
+              }}
+              className={[
+                "w-full rounded-lg px-3 py-2 text-[12px] font-semibold border",
+                viewMode === "HEAD_TORSO"
+                  ? "bg-white text-black border-white/20"
+                  : "bg-white/10 text-white border-white/10 hover:bg-white/15",
+              ].join(" ")}
+            >
+              หน้าและลำตัว
+            </button>
           </div>
 
-          {/* camera lock */}
           <button
             onClick={() => setLockCamera((v) => !v)}
             className={[
               "w-full rounded-lg px-3 py-2 text-[12px] font-semibold border mb-3",
-              lockCamera ? "bg-white text-black border-white/20" : "bg-white/10 text-white border-white/10 hover:bg-white/15",
+              lockCamera
+                ? "bg-white text-black border-white/20"
+                : "bg-white/10 text-white border-white/10 hover:bg-white/15",
             ].join(" ")}
           >
             {lockCamera ? "กล้อง: ล็อก (นิ่ง)" : "กล้อง: ติดตาม (ซูม)"}
           </button>
 
-          {/* Scrollable finger color description (บอกว่านิ้วสีอะไร) */}
+          <button
+            onClick={() => setShowFingerColors((v) => !v)}
+            className={[
+              "w-full rounded-lg px-3 py-2 text-[12px] font-semibold border mb-3",
+              showFingerColors
+                ? "bg-white text-black border-white/20"
+                : "bg-white/10 text-white border-white/10 hover:bg-white/15",
+            ].join(" ")}
+          >
+            {showFingerColors ? "แสดงสีนิ้ว: เปิด" : "แสดงสีนิ้ว: ปิด"}
+          </button>
+
           <div className="mt-2">
-            <div className="text-white font-semibold text-sm mb-2">คำอธิบายสีของนิ้ว</div>
+            <div className="text-white font-semibold text-sm mb-2">
+              คำอธิบายสีของนิ้ว
+            </div>
 
             <div className="max-h-[45vh] overflow-y-auto pr-1 space-y-2">
               {[
@@ -900,7 +1132,11 @@ export default function PosePlayer({
                   <summary className="cursor-pointer list-none flex items-center gap-2 text-white/90 text-[12px] font-semibold">
                     <span
                       className="inline-block w-3 h-3 rounded-full"
-                      style={{ background: showFingerColors ? f.color : "rgba(255,255,255,0.45)" }}
+                      style={{
+                        background: showFingerColors
+                          ? f.color
+                          : "rgba(255,255,255,0.45)",
+                      }}
                     />
                     {f.name}
                   </summary>
@@ -909,22 +1145,49 @@ export default function PosePlayer({
             </div>
           </div>
 
-          {/* explanation (scroll) */}
           <div className="mt-4 text-white/85 text-[12px] leading-relaxed">
             <div className="font-semibold text-white mb-1">หมายเหตุ</div>
-            <div className="max-h-[20vh] overflow-y-auto pr-1 text-white/70 text-[11px]">
+            <div className="max-h-[24vh] overflow-y-auto pr-1 text-white/70 text-[11px]">
               <ul className="list-disc pl-5 space-y-1">
                 <li>
-                  <b>กล้อง: ล็อก (นิ่ง)</b> — กล้องจะไม่ซูมหรือขยับตามการเคลื่อนไหวของตัวแบบ
-                  ทำให้ภาพนิ่งและลดอาการสั่น แต่ยังสามารถเลือกดูแบบ
-                  <b>เต็มตัว</b> หรือ <b>ครึ่งตัวบน</b> ได้
+                  <b>emotion</b> ใช้กำหนดสีหน้า เช่น happy, sad, angry
                 </li>
-
                 <li>
-                  <b>กล้อง: ติดตาม (ซูม)</b> — กล้องจะปรับขนาดและตำแหน่งตามการเคลื่อนไหวของตัวแบบ
-                  เพื่อให้ตัวแบบอยู่กลางหน้าจอเสมอ
+                  <b>items</b> ใช้เวลาต้องการให้แต่ละคำมีอารมณ์ต่างกัน
+                </li>
+                <li>
+                  <b>กล้อง: ล็อก (นิ่ง)</b> จะช่วยลดอาการสั่น
+                </li>
+                <li>
+                  เวอร์ชันนี้วาดมือหลังวาดหน้า ทำให้มืออยู่ด้านหน้าของใบหน้า
                 </li>
               </ul>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <div className="text-white font-semibold text-sm mb-2">
+              ตัวอย่าง emotion
+            </div>
+            <div className="space-y-2 text-[11px] text-white/80">
+              <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
+                neutral = ปกติ
+              </div>
+              <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
+                happy = ดีใจ
+              </div>
+              <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
+                sad = เสียใจ
+              </div>
+              <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
+                angry = โกรธ
+              </div>
+              <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
+                surprised = ตกใจ
+              </div>
+              <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
+                question = สงสัย / คำถาม
+              </div>
             </div>
           </div>
         </div>

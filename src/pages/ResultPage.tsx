@@ -64,6 +64,20 @@ interface CategoryRoleRow {
   priority: number;
 }
 
+type Emotion =
+  | "neutral"
+  | "happy"
+  | "sad"
+  | "angry"
+  | "surprised"
+  | "question";
+
+type PosePlaylistItem = {
+  url: string;
+  label: string;
+  emotion: Emotion;
+};
+
 function normalizeThaiToken(s: string) {
   return (s ?? "").replace(/\u200B|\u200C|\u200D|\uFEFF/g, "").trim();
 }
@@ -212,6 +226,57 @@ function reorderByRule(
   return out.filter(Boolean);
 }
 
+function getEmotionFromWord(word: string): Emotion {
+  const w = normalizeThaiToken(word);
+
+  const angryWords = new Set([
+    "โกรธ",
+    "โมโห",
+    "ไม่พอใจ",
+    "หงุดหงิด",
+    "ฉุนเฉียว",
+  ]);
+
+  const sadWords = new Set([
+    "เสียใจ",
+    "เศร้า",
+    "ร้องไห้",
+    "ทุกข์",
+    "ผิดหวัง",
+  ]);
+
+  const happyWords = new Set([
+    "ดีใจ",
+    "ยินดี",
+    "มีความสุข",
+    "สุข",
+    "ชอบ",
+  ]);
+
+  const surprisedWords = new Set(["ตกใจ", "ประหลาดใจ", "ตะลึง"]);
+
+  const questionWords = new Set([
+    "ทำไม",
+    "อะไร",
+    "ใคร",
+    "ที่ไหน",
+    "เมื่อไร",
+    "เมื่อไหร่",
+    "อย่างไร",
+    "ยังไง",
+    "ไหม",
+    "หรือยัง",
+  ]);
+
+  if (angryWords.has(w)) return "angry";
+  if (sadWords.has(w)) return "sad";
+  if (happyWords.has(w)) return "happy";
+  if (surprisedWords.has(w)) return "surprised";
+  if (questionWords.has(w)) return "question";
+
+  return "neutral";
+}
+
 export default function ResultPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -221,7 +286,9 @@ export default function ResultPage() {
   const [foundWords, setFoundWords] = useState<ProcessedWordData[]>([]);
   const [loadingKeywords, setLoadingKeywords] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("sentence");
-  const [currentSinglePose, setCurrentSinglePose] = useState<string | null>(null);
+
+  const [currentSingleIndex, setCurrentSingleIndex] = useState(0);
+
   const [sentenceVideoUrl, setSentenceVideoUrl] = useState<string | null>(null);
   const [loadingSentenceVideo, setLoadingSentenceVideo] = useState(false);
 
@@ -326,20 +393,21 @@ export default function ResultPage() {
           ? resultData.keywords
           : segmentThaiWords(summaryText)
       );
+
       const fixedTokens = resultData.thsl_fixed?.trim()
-      ? cleanTokens(
-        /\s/.test(resultData.thsl_fixed.trim())
-          ? resultData.thsl_fixed.trim().split(/\s+/)
-          : Array.isArray(resultData.keywords) && resultData.keywords.length > 0
-          ? resultData.keywords
-          : [resultData.thsl_fixed.trim()]
-      )
-      : [];
+        ? cleanTokens(
+            /\s/.test(resultData.thsl_fixed.trim())
+              ? resultData.thsl_fixed.trim().split(/\s+/)
+              : Array.isArray(resultData.keywords) && resultData.keywords.length > 0
+              ? resultData.keywords
+              : [resultData.thsl_fixed.trim()]
+          )
+        : [];
 
       if (fixedTokens.length === 0 && kwTokens.length === 0 && !summaryText) {
         if (cancelled) return;
         setFoundWords([]);
-        setCurrentSinglePose(null);
+        setCurrentSingleIndex(0);
         setNewBlobUrl(isFromHistory ? resultData.historyVideoUrl || null : null);
         setLoadingKeywords(false);
         setLoadingSentenceVideo(false);
@@ -466,7 +534,7 @@ export default function ResultPage() {
           console.error("Fetch SL_word error:", error);
           if (cancelled) return;
           setFoundWords([]);
-          setCurrentSinglePose(null);
+          setCurrentSingleIndex(0);
           setLoadingKeywords(false);
           setLoadingSentenceVideo(false);
           return;
@@ -528,7 +596,7 @@ export default function ResultPage() {
         console.error("Fetch SL_word (final) error:", errFinal);
         if (cancelled) return;
         setFoundWords([]);
-        setCurrentSinglePose(null);
+        setCurrentSingleIndex(0);
         setLoadingKeywords(false);
         setLoadingSentenceVideo(false);
         return;
@@ -579,8 +647,9 @@ export default function ResultPage() {
       }));
 
       if (cancelled) return;
+
       setFoundWords(processed);
-      setCurrentSinglePose(processed.length > 0 ? processed[0].fullUrl : null);
+      setCurrentSingleIndex(0);
       setLoadingKeywords(false);
 
       if (isFromHistory && resultData.historyVideoUrl) {
@@ -655,6 +724,19 @@ export default function ResultPage() {
     resultData.thsl_fixed,
     resultData.keywords,
   ]);
+
+  const poseItems = useMemo<PosePlaylistItem[]>(() => {
+    return foundWords.map((item) => ({
+      url: item.fullUrl,
+      label: item.word,
+      emotion: getEmotionFromWord(item.word),
+    }));
+  }, [foundWords]);
+
+  const currentSingleItem =
+    poseItems.length > 0
+      ? poseItems[Math.min(currentSingleIndex, poseItems.length - 1)]
+      : null;
 
   const handleDownloadSentenceVideo = () => {
     if (!sentenceVideoUrl) return;
@@ -805,15 +887,16 @@ export default function ResultPage() {
                     <RefreshCw className="animate-spin mb-2" />
                     <span className="text-xs">กำลังค้นหาท่าภาษามือ...</span>
                   </div>
-                ) : currentSinglePose ? (
+                ) : currentSingleItem ? (
                   <PosePlayer
-                    key={currentSinglePose}
-                    poseUrl={currentSinglePose}
+                    key={currentSingleIndex}
+                    poseUrl={currentSingleItem.url}
                     width={640}
                     height={360}
                     fps={24}
                     confThreshold={0.05}
                     flipY={false}
+                    emotion={currentSingleItem.emotion}
                   />
                 ) : (
                   <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
@@ -857,12 +940,14 @@ export default function ResultPage() {
                 <p className="text-[#263F5D]/60 text-sm animate-pulse">กำลังเรียงตามกฎ ThSL...</p>
               ) : foundWords.length > 0 ? (
                 foundWords.map((item, idx) => {
-                  const isActive = currentSinglePose === item.fullUrl;
+                  const isActive = currentSingleIndex === idx;
+                  const emo = getEmotionFromWord(item.word);
+
                   return (
                     <Badge
                       key={`${item.word}-${idx}`}
                       onClick={() => {
-                        setCurrentSinglePose(item.fullUrl);
+                        setCurrentSingleIndex(idx);
                         setViewMode("single");
                       }}
                       className={`cursor-pointer px-3 py-1.5 text-xs transition-all border border-transparent ${
@@ -870,7 +955,7 @@ export default function ResultPage() {
                           ? "bg-[#FEC530] text-[#0F1F2F] scale-105 shadow-md border-white/20"
                           : "bg-[#0F1F2F] text-[#C9A7E3] hover:bg-[#1a2f44] hover:scale-105"
                       }`}
-                      title={`หมวดหมู่: ${item.category}`}
+                      title={`หมวดหมู่: ${item.category} | emotion: ${emo}`}
                     >
                       {item.word}
                     </Badge>
