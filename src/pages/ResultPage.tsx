@@ -399,8 +399,8 @@ export default function ResultPage() {
             /\s/.test(resultData.thsl_fixed.trim())
               ? resultData.thsl_fixed.trim().split(/\s+/)
               : Array.isArray(resultData.keywords) && resultData.keywords.length > 0
-              ? resultData.keywords
-              : [resultData.thsl_fixed.trim()]
+                ? resultData.keywords
+                : [resultData.thsl_fixed.trim()]
           )
         : [];
 
@@ -836,22 +836,27 @@ export default function ResultPage() {
               </div>
 
               <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden mb-4 border border-white/10 shadow-inner">
-                {loadingKeywords || loadingSentenceVideo ? (
+                {loadingKeywords ? (
                   <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
                     <RefreshCw className="animate-spin mb-2" />
-                    <span className="text-xs">กำลังสร้างวิดีโอทั้งประโยค...</span>
+                    <span className="text-xs">กำลังเตรียมท่าภาษามือ...</span>
                   </div>
-                ) : sentenceVideoUrl ? (
-                  <video
-                    className="w-full h-full object-contain"
-                    src={sentenceVideoUrl}
-                    controls
-                    playsInline
+                ) : poseItems.length > 0 ? (
+                  <PosePlayer
+                    key={`sentence-${poseItems.length}-${resultData.summary ?? ""}`}
+                    items={poseItems}
+                    width={640}
+                    height={360}
+                    fps={46}
+                    confThreshold={0.05}
+                    flipY={false}
+                    loopPlaylist={true}
+                    loopPose={false}
                   />
                 ) : (
                   <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
                     <span className="text-3xl mb-2">🚫</span>
-                    <span className="text-xs">สร้างวิดีโอไม่สำเร็จ (เช็ค backend / pose_concat)</span>
+                    <span className="text-xs">ไม่พบท่าภาษามือสำหรับประโยคนี้</span>
                   </div>
                 )}
               </div>
@@ -889,7 +894,7 @@ export default function ResultPage() {
                   </div>
                 ) : currentSingleItem ? (
                   <PosePlayer
-                    key={currentSingleIndex}
+                    key={`single-${currentSingleIndex}-${currentSingleItem.label}`}
                     poseUrl={currentSingleItem.url}
                     width={640}
                     height={360}
