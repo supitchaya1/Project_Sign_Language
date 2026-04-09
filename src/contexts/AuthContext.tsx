@@ -19,10 +19,12 @@ interface AuthContextType {
   loginWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
-  updateProfile: (name: string, avatarUrl?: string | null) => Promise<void>;
+  updateProfile: (name: string, avatarFile?: File | null) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+const AVATAR_BUCKET = "avatars";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -32,25 +34,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let isMounted = true;
 
-    // โหลด session ตอนเปิดเว็บ
     supabase.auth.getSession().then(({ data, error }) => {
       if (!isMounted) return;
+
       if (error) {
         console.error("getSession error:", error);
       }
+
       setSession(data.session ?? null);
       setUser(data.session?.user ?? null);
       setLoading(false);
     });
 
-    // ฟัง auth state change
-    const { data } = supabase.auth.onAuthStateChange(
-      (_event, newSession) => {
-        setSession(newSession);
-        setUser(newSession?.user ?? null);
-        setLoading(false);
-      }
-    );
+    const { data } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      setUser(newSession?.user ?? null);
+      setLoading(false);
+    });
 
     return () => {
       isMounted = false;
@@ -60,9 +60,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const userId = user?.id ?? null;
 
-  // ========================
-  // LOGIN
-  // ========================
   const login = async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({
       email,
@@ -71,9 +68,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw error;
   };
 
-  // ========================
-  // LOGIN WITH GOOGLE
-  // ========================
   const loginWithGoogle = async () => {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
@@ -84,9 +78,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw error;
   };
 
-  // ========================
-  // REGISTER
-  // ========================
   const register = async (
     name: string,
     email: string,
@@ -102,58 +93,92 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw error;
   };
 
-  // ========================
-  // LOGOUT (แก้ปัญหา ERR_CONNECTION_RESET)
-  // ========================
   const logout = async () => {
-    // ล้าง state ฝั่ง UI ทันที ป้องกันค้าง
     setSession(null);
     setUser(null);
 
     try {
-      // พยายาม revoke ทุก device ก่อน
       const { error } = await supabase.auth.signOut({
         scope: "global",
       });
       if (error) throw error;
     } catch (err) {
-      console.warn(
-        "Global signOut failed → fallback to local",
-        err
-      );
+      console.warn("Global signOut failed → fallback to local", err);
 
-      // ถ้า network ล้มเหลว ให้ล้างเฉพาะเครื่องนี้
-      const { error: localError } =
-        await supabase.auth.signOut({
-          scope: "local",
-        });
+      const { error: localError } = await supabase.auth.signOut({
+        scope: "local",
+      });
 
       if (localError) throw localError;
     }
   };
 
-  // ========================
-  // UPDATE PROFILE
-  // ========================
   const updateProfile = async (
     name: string,
-    avatarUrl?: string | null
-  ) => {
-    const { error, data } = await supabase.auth.updateUser({
+    avatarFile?: File | null
+  ): Promise<void> => {
+    const trimmedName = name.trim();
+
+    if (!trimmedName) {
+      throw new Error("กรุณากรอกชื่อ");
+    }
+
+    const {
+      data: { user: currentUser },
+      error: getUserError,
+    } = await supabase.auth.getUser();
+
+    if (getUserError) throw getUserError;
+    if (!currentUser) throw new Error("ไม่พบผู้ใช้");
+
+    let avatarUrl =
+      (currentUser.user_metadata?.avatar_url as string | undefined) ||
+      (currentUser.user_metadata?.picture as string | undefined) ||
+      null;
+
+    if (avatarFile) {
+      if (!avatarFile.type.startsWith("image/")) {
+        throw new Error("กรุณาเลือกไฟล์รูปภาพเท่านั้น");
+      }
+
+      if (avatarFile.size > 2 * 1024 * 1024) {
+        throw new Error("รูปมีขนาดใหญ่เกินไป กรุณาเลือกไฟล์ไม่เกิน 2MB");
+      }
+
+      const ext = avatarFile.name.split(".").pop() || "jpg";
+      const filePath = `${currentUser.id}/avatar-${Date.now()}.${ext}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from(AVATAR_BUCKET)
+        .upload(filePath, avatarFile, {
+          upsert: true,
+        });
+
+      if (uploadError) {
+        throw new Error(`อัปโหลดรูปไม่สำเร็จ: ${uploadError.message}`);
+      }
+
+      const { data: publicUrlData } = supabase.storage
+        .from(AVATAR_BUCKET)
+        .getPublicUrl(filePath);
+
+      avatarUrl = publicUrlData.publicUrl;
+    }
+
+    const { data, error } = await supabase.auth.updateUser({
       data: {
-        name,
-        avatar_url: avatarUrl ?? null,
+        ...currentUser.user_metadata,
+        name: trimmedName,
+        avatar_url: avatarUrl,
       },
     });
 
     if (error) throw error;
+
     setUser(data.user);
   };
 
-  const isAuthenticated = useMemo(
-    () => !!session?.user,
-    [session]
-  );
+  const isAuthenticated = useMemo(() => !!session?.user, [session]);
 
   return (
     <AuthContext.Provider
