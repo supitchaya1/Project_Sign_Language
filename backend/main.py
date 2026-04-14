@@ -14,7 +14,6 @@ from supabase import create_client, Client
 from pose_format import Pose
 
 # ✅ import pose_concat
-from pose_concat.concat_poses import pose_sequence
 
 # =========================
 # 0) Load .env
@@ -287,6 +286,7 @@ def pose_meta(name: str = Query(..., description="ชื่อไฟล์ .pose
 @app.post("/api/concat_video")
 def concat_video(req: ConcatRequest):
     try:
+       	# from pose_concat.concat_poses import pose_sequence
         if not req.pose_filenames:
             raise HTTPException(status_code=400, detail="pose_filenames cannot be empty")
 

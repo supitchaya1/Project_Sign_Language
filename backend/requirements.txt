@@ -3,7 +3,7 @@ python-dotenv
 fastapi
 uvicorn
 pose-format
-spoken-to-signed
-tensorflow
+#spoken-to-signed
+#tensorflow
 numpy
 pandas
