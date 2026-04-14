@@ -22,7 +22,7 @@ function joinUrl(base: string, path: string) {
 
 function buildPoseUrl(filename: string) {
   const clean = (filename ?? "").trim();
-  return `${joinUrl(BACKEND_URL, "pose")}?name=${encodeURIComponent(clean)}`;
+  return `${joinUrl(BACKEND_URL, "api/pose")}?name=${encodeURIComponent(clean)}`;
 }
 
 interface ResultState {
@@ -670,7 +670,7 @@ export default function ResultPage() {
           return;
         }
 
-        const resp = await fetch(joinUrl(BACKEND_URL, "concat_video"), {
+        const resp = await fetch(joinUrl(BACKEND_URL, "api/concat_video"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
