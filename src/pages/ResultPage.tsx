@@ -11,8 +11,24 @@ import { toast } from "sonner";
 import { THSL_RULES, Role as RuleRole, ThslRule } from "@/services/thslRules";
 import { saveHistory, type HistoryRecord } from "@/services/history";
 
-const BACKEND_URL =
-  (import.meta.env.VITE_BACKEND_BASE as string) || "http://127.0.0.1:8000";
+// const BACKEND_URL =
+//   (import.meta.env.VITE_BACKEND_BASE as string) || "http://127.0.0.1:8000";
+
+// function joinUrl(base: string, path: string) {
+//   const b = (base ?? "").trim().replace(/\/+$/, "");
+//   const p = (path ?? "").trim().replace(/^\/+/, "");
+//   return `${b}/${p}`;
+// }
+
+// function buildPoseUrl(filename: string) {
+//   const clean = (filename ?? "").trim();
+//   return `${joinUrl(BACKEND_URL, "api/pose")}?name=${encodeURIComponent(clean)}`;
+// }
+
+// ✅ แก้ API BASE ให้รองรับทั้ง local + deploy
+const API_BASE =
+  (import.meta.env.VITE_BACKEND_BASE as string) ||
+  "http://127.0.0.1:8000/api";
 
 function joinUrl(base: string, path: string) {
   const b = (base ?? "").trim().replace(/\/+$/, "");
@@ -20,9 +36,13 @@ function joinUrl(base: string, path: string) {
   return `${b}/${p}`;
 }
 
+function buildApiUrl(path: string) {
+  return joinUrl(API_BASE, path);
+}
+
 function buildPoseUrl(filename: string) {
   const clean = (filename ?? "").trim();
-  return `${joinUrl(BACKEND_URL, "api/pose")}?name=${encodeURIComponent(clean)}`;
+  return `${buildApiUrl("pose")}?name=${encodeURIComponent(clean)}`;
 }
 
 interface ResultState {
@@ -365,6 +385,15 @@ export default function ResultPage() {
 
     (async () => {
       try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (!session?.user) {
+          console.log("skip saveHistory: no auth");
+          return;
+        }
+
         await saveHistory({
           input_text: inputText,
           translated_result: translated,
@@ -670,7 +699,7 @@ export default function ResultPage() {
           return;
         }
 
-        const resp = await fetch(joinUrl(BACKEND_URL, "api/concat_video"), {
+        const resp = await fetch(buildApiUrl("concat_video"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
