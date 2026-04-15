@@ -13,8 +13,8 @@ import HistoryPage from "@/pages/HistoryPage";
 import LoginPage from "@/pages/LoginPage";
 import RegisterPage from "@/pages/RegisterPage";
 import ProfilePage from "@/pages/ProfilePage";
+import ExportVideoPage from "@/pages/ExportVideoPage";
 import NotFound from "@/pages/NotFound";
-// import ProtectedRoute from "@/components/auth/ProtectedRoute";
 
 const queryClient = new QueryClient();
 
@@ -26,18 +26,20 @@ const App = () => (
           <Toaster />
           <Sonner />
           <BrowserRouter>
-            <Layout>
-              <Routes>
-                <Route path="/" element={<HomePage />} />
-                <Route path="/translate" element={<TranslatePage />} />
-                <Route path="/result" element={<ResultPage />} />
-                <Route path="/history" element={<HistoryPage />} />
-                <Route path="/login" element={<LoginPage />} />
-                <Route path="/register" element={<RegisterPage />} />
-                <Route path="/profile" element={<ProfilePage />} />
+            <Routes>
+              <Route path="/export-video" element={<ExportVideoPage />} />
+
+              <Route path="/" element={<Layout />}>
+                <Route index element={<HomePage />} />
+                <Route path="translate" element={<TranslatePage />} />
+                <Route path="result" element={<ResultPage />} />
+                <Route path="history" element={<HistoryPage />} />
+                <Route path="login" element={<LoginPage />} />
+                <Route path="register" element={<RegisterPage />} />
+                <Route path="profile" element={<ProfilePage />} />
                 <Route path="*" element={<NotFound />} />
-              </Routes>
-            </Layout>
+              </Route>
+            </Routes>
           </BrowserRouter>
         </TooltipProvider>
       </AuthProvider>

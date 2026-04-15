@@ -20,9 +20,13 @@ type Props = {
   poseUrls?: string[];
   items?: PlaylistItem[];
 
+  playlist?: string[];
+  autoPlay?: boolean;
+  exportMode?: boolean;
+  className?: string;
+
   width?: number;
   height?: number;
-  autoPlay?: boolean;
   fps?: number;
   confThreshold?: number;
   loopPlaylist?: boolean;
@@ -30,6 +34,9 @@ type Props = {
   flipY?: boolean;
 
   emotion?: Emotion;
+
+  // เพิ่มสำหรับ export
+  onSequenceEnd?: () => void;
 };
 
 type Point = { x: number; y: number; z: number; c: number };
@@ -103,26 +110,31 @@ const HAND_PALM_EDGES: Array<[number, number]> = [
   [9, 13],
   [13, 17],
 ];
+
 const THUMB_EDGES: Array<[number, number]> = [
   [1, 2],
   [2, 3],
   [3, 4],
 ];
+
 const INDEX_EDGES: Array<[number, number]> = [
   [5, 6],
   [6, 7],
   [7, 8],
 ];
+
 const MIDDLE_EDGES: Array<[number, number]> = [
   [9, 10],
   [10, 11],
   [11, 12],
 ];
+
 const RING_EDGES: Array<[number, number]> = [
   [13, 14],
   [14, 15],
   [15, 16],
 ];
+
 const PINKY_EDGES: Array<[number, number]> = [
   [17, 18],
   [18, 19],
@@ -224,19 +236,23 @@ export default function PosePlayer({
   poseUrl,
   poseUrls,
   items,
+  playlist,
   width = 640,
   height = 360,
   autoPlay = true,
+  exportMode = false,
+  className = "",
   fps = 24,
   confThreshold = 0.05,
   loopPlaylist = false,
   loopPose = true,
   flipY = false,
   emotion = "neutral",
+  onSequenceEnd,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  const [playlist, setPlaylist] = useState<string[]>([]);
+  const [resolvedPlaylist, setResolvedPlaylist] = useState<string[]>([]);
   const [playlistItems, setPlaylistItems] = useState<PlaylistItem[]>([]);
   const [currentUrlIndex, setCurrentUrlIndex] = useState(0);
 
@@ -254,6 +270,7 @@ export default function PosePlayer({
   const lastTimeRef = useRef<number>(0);
 
   const smoothPtsRef = useRef<Point[] | null>(null);
+  const endCalledRef = useRef(false);
 
   const bboxRef = useRef<{
     minX: number;
@@ -274,21 +291,41 @@ export default function PosePlayer({
     bboxRef.current = null;
   };
 
+  const fireSequenceEndOnce = () => {
+    if (endCalledRef.current) return;
+    endCalledRef.current = true;
+    onSequenceEnd?.();
+  };
+
   useEffect(() => {
     bboxRef.current = null;
   }, [viewMode, currentUrlIndex]);
 
   useEffect(() => {
+    setPlaying(autoPlay);
+  }, [autoPlay]);
+
+  useEffect(() => {
+    endCalledRef.current = false;
+
     if (items && items.length > 0) {
       setPlaylistItems(items);
-      setPlaylist(items.map((x) => x.url));
+      setResolvedPlaylist(items.map((x) => x.url));
+      setCurrentUrlIndex(0);
+      return;
+    }
+
+    if (playlist && playlist.length > 0) {
+      const mapped = playlist.map((url) => ({ url, emotion }));
+      setPlaylistItems(mapped);
+      setResolvedPlaylist(playlist);
       setCurrentUrlIndex(0);
       return;
     }
 
     if (poseUrl) {
       setPlaylistItems([{ url: poseUrl, emotion }]);
-      setPlaylist([poseUrl]);
+      setResolvedPlaylist([poseUrl]);
       setCurrentUrlIndex(0);
       return;
     }
@@ -296,19 +333,19 @@ export default function PosePlayer({
     if (poseUrls && poseUrls.length > 0) {
       const mapped = poseUrls.map((url) => ({ url, emotion }));
       setPlaylistItems(mapped);
-      setPlaylist(poseUrls);
+      setResolvedPlaylist(poseUrls);
       setCurrentUrlIndex(0);
       return;
     }
 
     setPlaylistItems([]);
-    setPlaylist([]);
+    setResolvedPlaylist([]);
     setCurrentUrlIndex(0);
-  }, [poseUrl, poseUrls, items, emotion]);
+  }, [poseUrl, poseUrls, items, playlist, emotion]);
 
   useEffect(() => {
     let active = true;
-    const url = playlist[currentUrlIndex];
+    const url = resolvedPlaylist[currentUrlIndex];
 
     const loadPose = async () => {
       if (!url) return;
@@ -371,7 +408,7 @@ export default function PosePlayer({
     return () => {
       active = false;
     };
-  }, [playlist, currentUrlIndex]);
+  }, [resolvedPlaylist, currentUrlIndex]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -393,8 +430,8 @@ export default function PosePlayer({
       const maxIndex = frames.length - 1;
 
       if (posRef.current >= frames.length) {
-        if (playlist.length > 1) {
-          if (currentUrlIndex < playlist.length - 1) {
+        if (resolvedPlaylist.length > 1) {
+          if (currentUrlIndex < resolvedPlaylist.length - 1) {
             setCurrentUrlIndex((p) => p + 1);
             posRef.current = 0;
             return;
@@ -403,17 +440,21 @@ export default function PosePlayer({
           if (loopPlaylist) {
             setCurrentUrlIndex(0);
             posRef.current = 0;
+            endCalledRef.current = false;
             return;
           }
 
           posRef.current = maxIndex;
           if (playing) setPlaying(false);
+          fireSequenceEndOnce();
         } else {
           if (loopPose) {
             posRef.current = 0;
+            endCalledRef.current = false;
           } else {
             posRef.current = maxIndex;
             if (playing) setPlaying(false);
+            fireSequenceEndOnce();
           }
         }
       }
@@ -484,7 +525,7 @@ export default function PosePlayer({
     frames,
     playing,
     fps,
-    playlist.length,
+    resolvedPlaylist.length,
     currentUrlIndex,
     loopPlaylist,
     loopPose,
@@ -495,6 +536,7 @@ export default function PosePlayer({
     lockCamera,
     emotion,
     playlistItems,
+    onSequenceEnd,
   ]);
 
   const drawBgGradient = (
@@ -958,7 +1000,6 @@ export default function PosePlayer({
       }
     }
 
-    // วาดมือทีหลังสุด เพื่อให้มืออยู่ด้านหน้าของใบหน้า
     drawHand(L_OFFSET);
     drawHand(R_OFFSET);
   };
@@ -976,222 +1017,232 @@ export default function PosePlayer({
     playlistItems[currentUrlIndex]?.emotion ?? emotion ?? "neutral";
 
   return (
-    <div className="relative w-full h-full">
+    <div className={`relative w-full h-full ${className}`}>
       <div className="w-full h-full flex flex-col items-center">
         <canvas
           ref={canvasRef}
           width={width}
           height={height}
           className="rounded-lg shadow-lg bg-[#0F1F2F]"
+          style={{
+            width: exportMode ? `${width}px` : "100%",
+            height: exportMode ? `${height}px` : "100%",
+          }}
         />
 
-        <div className="flex gap-2 mt-2 items-center opacity-80 hover:opacity-100 transition-opacity flex-wrap justify-center">
-          <button
-            onClick={() => setPlaying(!playing)}
-            className="text-[11px] bg-white/12 hover:bg-white/20 px-3 py-1.5 rounded-md text-white border border-white/10"
-          >
-            {playing ? "Pause" : "Play"}
-          </button>
+        {!exportMode && (
+          <div className="flex gap-2 mt-2 items-center opacity-80 hover:opacity-100 transition-opacity flex-wrap justify-center">
+            <button
+              onClick={() => setPlaying(!playing)}
+              className="text-[11px] bg-white/12 hover:bg-white/20 px-3 py-1.5 rounded-md text-white border border-white/10"
+            >
+              {playing ? "Pause" : "Play"}
+            </button>
 
-          {playlist.length > 1 && (
-            <span className="text-[11px] text-white/55">
-              Sequence: {currentUrlIndex + 1}/{playlist.length}
-            </span>
-          )}
+            {resolvedPlaylist.length > 1 && (
+              <span className="text-[11px] text-white/55">
+                Sequence: {currentUrlIndex + 1}/{resolvedPlaylist.length}
+              </span>
+            )}
 
-          {currentLabel && (
+            {currentLabel && (
+              <span className="text-[11px] text-white/75 bg-white/10 px-2 py-1 rounded-md border border-white/10">
+                คำ: {currentLabel}
+              </span>
+            )}
+
             <span className="text-[11px] text-white/75 bg-white/10 px-2 py-1 rounded-md border border-white/10">
-              คำ: {currentLabel}
+              สีหน้า: {currentEmotion}
             </span>
-          )}
-
-          <span className="text-[11px] text-white/75 bg-white/10 px-2 py-1 rounded-md border border-white/10">
-            สีหน้า: {currentEmotion}
-          </span>
-        </div>
+          </div>
+        )}
       </div>
 
-      <button
-        onClick={() => setPanelOpen((v) => !v)}
-        className="absolute top-3 right-3 z-50 rounded-xl px-4 py-2 text-[12px] font-semibold
-                   bg-white text-black shadow-lg hover:shadow-xl active:scale-[0.98]
-                   border border-black/10"
-        aria-label="Toggle options panel"
-        title="ตัวเลือก"
-      >
-        {panelOpen ? "ซ่อนตัวเลือก" : "ตัวเลือก"}
-      </button>
-
-      <div
-        className={[
-          "absolute top-0 right-0 h-full z-40",
-          "transition-transform duration-200 ease-out",
-          panelOpen
-            ? "translate-x-0 pointer-events-auto"
-            : "translate-x-full pointer-events-none",
-        ].join(" ")}
-        style={{ width: 320 }}
-      >
-        <div
-          className="h-full bg-black/55 backdrop-blur-md border-l border-white/10 p-3 pt-14 overflow-y-auto overscroll-contain"
-          style={{ WebkitOverflowScrolling: "touch" }}
-        >
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-white font-semibold text-sm">ตัวเลือก</div>
-          </div>
-
-          <div className="grid grid-cols-1 gap-2 mb-3">
-            <button
-              onClick={() => {
-                resetCamera();
-                setViewMode("FULL");
-              }}
-              className={[
-                "w-full rounded-lg px-3 py-2 text-[12px] font-semibold border",
-                viewMode === "FULL"
-                  ? "bg-white text-black border-white/20"
-                  : "bg-white/10 text-white border-white/10 hover:bg-white/15",
-              ].join(" ")}
-            >
-              เต็มตัว (หัวถึงขา)
-            </button>
-
-            <button
-              onClick={() => {
-                resetCamera();
-                setViewMode("UPPER");
-              }}
-              className={[
-                "w-full rounded-lg px-3 py-2 text-[12px] font-semibold border",
-                viewMode === "UPPER"
-                  ? "bg-white text-black border-white/20"
-                  : "bg-white/10 text-white border-white/10 hover:bg-white/15",
-              ].join(" ")}
-            >
-              ครึ่งตัวบน (หัวถึงเอว/สะโพก)
-            </button>
-
-            <button
-              onClick={() => {
-                resetCamera();
-                setViewMode("HEAD_TORSO");
-              }}
-              className={[
-                "w-full rounded-lg px-3 py-2 text-[12px] font-semibold border",
-                viewMode === "HEAD_TORSO"
-                  ? "bg-white text-black border-white/20"
-                  : "bg-white/10 text-white border-white/10 hover:bg-white/15",
-              ].join(" ")}
-            >
-              หน้าและลำตัว
-            </button>
-          </div>
-
+      {!exportMode && (
+        <>
           <button
-            onClick={() => setLockCamera((v) => !v)}
-            className={[
-              "w-full rounded-lg px-3 py-2 text-[12px] font-semibold border mb-3",
-              lockCamera
-                ? "bg-white text-black border-white/20"
-                : "bg-white/10 text-white border-white/10 hover:bg-white/15",
-            ].join(" ")}
+            onClick={() => setPanelOpen((v) => !v)}
+            className="absolute top-3 right-3 z-50 rounded-xl px-4 py-2 text-[12px] font-semibold
+                       bg-white text-black shadow-lg hover:shadow-xl active:scale-[0.98]
+                       border border-black/10"
+            aria-label="Toggle options panel"
+            title="ตัวเลือก"
           >
-            {lockCamera ? "กล้อง: ล็อก (นิ่ง)" : "กล้อง: ติดตาม (ซูม)"}
+            {panelOpen ? "ซ่อนตัวเลือก" : "ตัวเลือก"}
           </button>
 
-          <button
-            onClick={() => setShowFingerColors((v) => !v)}
+          <div
             className={[
-              "w-full rounded-lg px-3 py-2 text-[12px] font-semibold border mb-3",
-              showFingerColors
-                ? "bg-white text-black border-white/20"
-                : "bg-white/10 text-white border-white/10 hover:bg-white/15",
+              "absolute top-0 right-0 h-full z-40",
+              "transition-transform duration-200 ease-out",
+              panelOpen
+                ? "translate-x-0 pointer-events-auto"
+                : "translate-x-full pointer-events-none",
             ].join(" ")}
+            style={{ width: 320 }}
           >
-            {showFingerColors ? "แสดงสีนิ้ว: เปิด" : "แสดงสีนิ้ว: ปิด"}
-          </button>
+            <div
+              className="h-full bg-black/55 backdrop-blur-md border-l border-white/10 p-3 pt-14 overflow-y-auto overscroll-contain"
+              style={{ WebkitOverflowScrolling: "touch" }}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-white font-semibold text-sm">ตัวเลือก</div>
+              </div>
 
-          <div className="mt-2">
-            <div className="text-white font-semibold text-sm mb-2">
-              คำอธิบายสีของนิ้ว
-            </div>
-
-            <div className="max-h-[45vh] overflow-y-auto pr-1 space-y-2">
-              {[
-                { name: "นิ้วโป้ง", color: COLORS.thumb },
-                { name: "นิ้วชี้", color: COLORS.index },
-                { name: "นิ้วกลาง", color: COLORS.middle },
-                { name: "นิ้วนาง", color: COLORS.ring },
-                { name: "นิ้วก้อย", color: COLORS.pinky },
-              ].map((f) => (
-                <details
-                  key={f.name}
-                  className="rounded-lg border border-white/10 bg-white/8 px-3 py-2"
-                  open={false}
+              <div className="grid grid-cols-1 gap-2 mb-3">
+                <button
+                  onClick={() => {
+                    resetCamera();
+                    setViewMode("FULL");
+                  }}
+                  className={[
+                    "w-full rounded-lg px-3 py-2 text-[12px] font-semibold border",
+                    viewMode === "FULL"
+                      ? "bg-white text-black border-white/20"
+                      : "bg-white/10 text-white border-white/10 hover:bg-white/15",
+                  ].join(" ")}
                 >
-                  <summary className="cursor-pointer list-none flex items-center gap-2 text-white/90 text-[12px] font-semibold">
-                    <span
-                      className="inline-block w-3 h-3 rounded-full"
-                      style={{
-                        background: showFingerColors
-                          ? f.color
-                          : "rgba(255,255,255,0.45)",
-                      }}
-                    />
-                    {f.name}
-                  </summary>
-                </details>
-              ))}
-            </div>
-          </div>
+                  เต็มตัว (หัวถึงขา)
+                </button>
 
-          <div className="mt-4 text-white/85 text-[12px] leading-relaxed">
-            <div className="font-semibold text-white mb-1">หมายเหตุ</div>
-            <div className="max-h-[24vh] overflow-y-auto pr-1 text-white/70 text-[11px]">
-              <ul className="list-disc pl-5 space-y-1">
-                <li>
-                  <b>emotion</b> ใช้กำหนดสีหน้า เช่น happy, sad, angry
-                </li>
-                <li>
-                  <b>items</b> ใช้เวลาต้องการให้แต่ละคำมีอารมณ์ต่างกัน
-                </li>
-                <li>
-                  <b>กล้อง: ล็อก (นิ่ง)</b> จะช่วยลดอาการสั่น
-                </li>
-                <li>
-                  เวอร์ชันนี้วาดมือหลังวาดหน้า ทำให้มืออยู่ด้านหน้าของใบหน้า
-                </li>
-              </ul>
-            </div>
-          </div>
+                <button
+                  onClick={() => {
+                    resetCamera();
+                    setViewMode("UPPER");
+                  }}
+                  className={[
+                    "w-full rounded-lg px-3 py-2 text-[12px] font-semibold border",
+                    viewMode === "UPPER"
+                      ? "bg-white text-black border-white/20"
+                      : "bg-white/10 text-white border-white/10 hover:bg-white/15",
+                  ].join(" ")}
+                >
+                  ครึ่งตัวบน (หัวถึงเอว/สะโพก)
+                </button>
 
-          <div className="mt-4">
-            <div className="text-white font-semibold text-sm mb-2">
-              ตัวอย่าง emotion
-            </div>
-            <div className="space-y-2 text-[11px] text-white/80">
-              <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
-                neutral = ปกติ
+                <button
+                  onClick={() => {
+                    resetCamera();
+                    setViewMode("HEAD_TORSO");
+                  }}
+                  className={[
+                    "w-full rounded-lg px-3 py-2 text-[12px] font-semibold border",
+                    viewMode === "HEAD_TORSO"
+                      ? "bg-white text-black border-white/20"
+                      : "bg-white/10 text-white border-white/10 hover:bg-white/15",
+                  ].join(" ")}
+                >
+                  หน้าและลำตัว
+                </button>
               </div>
-              <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
-                happy = ดีใจ
+
+              <button
+                onClick={() => setLockCamera((v) => !v)}
+                className={[
+                  "w-full rounded-lg px-3 py-2 text-[12px] font-semibold border mb-3",
+                  lockCamera
+                    ? "bg-white text-black border-white/20"
+                    : "bg-white/10 text-white border-white/10 hover:bg-white/15",
+                ].join(" ")}
+              >
+                {lockCamera ? "กล้อง: ล็อก (นิ่ง)" : "กล้อง: ติดตาม (ซูม)"}
+              </button>
+
+              <button
+                onClick={() => setShowFingerColors((v) => !v)}
+                className={[
+                  "w-full rounded-lg px-3 py-2 text-[12px] font-semibold border mb-3",
+                  showFingerColors
+                    ? "bg-white text-black border-white/20"
+                    : "bg-white/10 text-white border-white/10 hover:bg-white/15",
+                ].join(" ")}
+              >
+                {showFingerColors ? "แสดงสีนิ้ว: เปิด" : "แสดงสีนิ้ว: ปิด"}
+              </button>
+
+              <div className="mt-2">
+                <div className="text-white font-semibold text-sm mb-2">
+                  คำอธิบายสีของนิ้ว
+                </div>
+
+                <div className="max-h-[45vh] overflow-y-auto pr-1 space-y-2">
+                  {[
+                    { name: "นิ้วโป้ง", color: COLORS.thumb },
+                    { name: "นิ้วชี้", color: COLORS.index },
+                    { name: "นิ้วกลาง", color: COLORS.middle },
+                    { name: "นิ้วนาง", color: COLORS.ring },
+                    { name: "นิ้วก้อย", color: COLORS.pinky },
+                  ].map((f) => (
+                    <details
+                      key={f.name}
+                      className="rounded-lg border border-white/10 bg-white/8 px-3 py-2"
+                      open={false}
+                    >
+                      <summary className="cursor-pointer list-none flex items-center gap-2 text-white/90 text-[12px] font-semibold">
+                        <span
+                          className="inline-block w-3 h-3 rounded-full"
+                          style={{
+                            background: showFingerColors
+                              ? f.color
+                              : "rgba(255,255,255,0.45)",
+                          }}
+                        />
+                        {f.name}
+                      </summary>
+                    </details>
+                  ))}
+                </div>
               </div>
-              <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
-                sad = เสียใจ
+
+              <div className="mt-4 text-white/85 text-[12px] leading-relaxed">
+                <div className="font-semibold text-white mb-1">หมายเหตุ</div>
+                <div className="max-h-[24vh] overflow-y-auto pr-1 text-white/70 text-[11px]">
+                  <ul className="list-disc pl-5 space-y-1">
+                    <li>
+                      <b>emotion</b> ใช้กำหนดสีหน้า เช่น happy, sad, angry
+                    </li>
+                    <li>
+                      <b>items</b> ใช้เวลาต้องการให้แต่ละคำมีอารมณ์ต่างกัน
+                    </li>
+                    <li>
+                      <b>กล้อง: ล็อก (นิ่ง)</b> จะช่วยลดอาการสั่น
+                    </li>
+                    <li>
+                      เวอร์ชันนี้วาดมือหลังวาดหน้า ทำให้มืออยู่ด้านหน้าของใบหน้า
+                    </li>
+                  </ul>
+                </div>
               </div>
-              <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
-                angry = โกรธ
-              </div>
-              <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
-                surprised = ตกใจ
-              </div>
-              <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
-                question = สงสัย / คำถาม
+
+              <div className="mt-4">
+                <div className="text-white font-semibold text-sm mb-2">
+                  ตัวอย่าง emotion
+                </div>
+                <div className="space-y-2 text-[11px] text-white/80">
+                  <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
+                    neutral = ปกติ
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
+                    happy = ดีใจ
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
+                    sad = เสียใจ
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
+                    angry = โกรธ
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
+                    surprised = ตกใจ
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
+                    question = สงสัย / คำถาม
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      </div>
+        </>
+      )}
     </div>
   );
 }

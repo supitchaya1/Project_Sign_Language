@@ -11,21 +11,6 @@ import { toast } from "sonner";
 import { THSL_RULES, Role as RuleRole, ThslRule } from "@/services/thslRules";
 import { saveHistory, type HistoryRecord } from "@/services/history";
 
-// const BACKEND_URL =
-//   (import.meta.env.VITE_BACKEND_BASE as string) || "http://127.0.0.1:8000";
-
-// function joinUrl(base: string, path: string) {
-//   const b = (base ?? "").trim().replace(/\/+$/, "");
-//   const p = (path ?? "").trim().replace(/^\/+/, "");
-//   return `${b}/${p}`;
-// }
-
-// function buildPoseUrl(filename: string) {
-//   const clean = (filename ?? "").trim();
-//   return `${joinUrl(BACKEND_URL, "api/pose")}?name=${encodeURIComponent(clean)}`;
-// }
-
-// ✅ แก้ API BASE ให้รองรับทั้ง local + deploy
 const API_BASE =
   (import.meta.env.VITE_BACKEND_BASE as string) ||
   "http://127.0.0.1:8000/api";
@@ -306,11 +291,11 @@ export default function ResultPage() {
   const [foundWords, setFoundWords] = useState<ProcessedWordData[]>([]);
   const [loadingKeywords, setLoadingKeywords] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("sentence");
-
   const [currentSingleIndex, setCurrentSingleIndex] = useState(0);
 
-  const [sentenceVideoUrl, setSentenceVideoUrl] = useState<string | null>(null);
+  // สำหรับดาวน์โหลด mp4
   const [loadingSentenceVideo, setLoadingSentenceVideo] = useState(false);
+  const [sentenceVideoUrl, setSentenceVideoUrl] = useState<string | null>(null);
 
   const prevBlobUrl = useRef<string | null>(null);
   const savedOnceRef = useRef(false);
@@ -366,6 +351,14 @@ export default function ResultPage() {
   };
 
   useEffect(() => {
+    return () => {
+      if (prevBlobUrl.current && prevBlobUrl.current.startsWith("blob:")) {
+        URL.revokeObjectURL(prevBlobUrl.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (isFromHistory && resultData.historyVideoUrl) {
       setSentenceVideoUrl(resultData.historyVideoUrl);
     }
@@ -412,7 +405,6 @@ export default function ResultPage() {
 
   useEffect(() => {
     let cancelled = false;
-    const abort = new AbortController();
 
     const run = async () => {
       const summaryText = (resultData.summary ?? "").replace(/\s+/g, "").trim();
@@ -428,8 +420,8 @@ export default function ResultPage() {
             /\s/.test(resultData.thsl_fixed.trim())
               ? resultData.thsl_fixed.trim().split(/\s+/)
               : Array.isArray(resultData.keywords) && resultData.keywords.length > 0
-                ? resultData.keywords
-                : [resultData.thsl_fixed.trim()]
+              ? resultData.keywords
+              : [resultData.thsl_fixed.trim()]
           )
         : [];
 
@@ -437,22 +429,12 @@ export default function ResultPage() {
         if (cancelled) return;
         setFoundWords([]);
         setCurrentSingleIndex(0);
-        setNewBlobUrl(isFromHistory ? resultData.historyVideoUrl || null : null);
         setLoadingKeywords(false);
-        setLoadingSentenceVideo(false);
         return;
       }
 
       if (cancelled) return;
       setLoadingKeywords(true);
-
-      if (!isFromHistory || !resultData.historyVideoUrl) {
-        setLoadingSentenceVideo(true);
-        setNewBlobUrl(null);
-      } else {
-        setLoadingSentenceVideo(false);
-        setSentenceVideoUrl(resultData.historyVideoUrl);
-      }
 
       const { data: mapData, error: mapErr } = await supabase
         .from("sl_category_role")
@@ -565,7 +547,6 @@ export default function ResultPage() {
           setFoundWords([]);
           setCurrentSingleIndex(0);
           setLoadingKeywords(false);
-          setLoadingSentenceVideo(false);
           return;
         }
 
@@ -615,11 +596,10 @@ export default function ResultPage() {
           : tagged.map((t) => t.word);
       }
 
-      const uniqueFinal = Array.from(new Set(finalOrderedTokens));
       const { data: dataFinal, error: errFinal } = await supabase
         .from("SL_word")
         .select("word, category, pose_filename")
-        .in("word", uniqueFinal);
+        .in("word", Array.from(new Set(finalOrderedTokens)));
 
       if (errFinal) {
         console.error("Fetch SL_word (final) error:", errFinal);
@@ -627,7 +607,6 @@ export default function ResultPage() {
         setFoundWords([]);
         setCurrentSingleIndex(0);
         setLoadingKeywords(false);
-        setLoadingSentenceVideo(false);
         return;
       }
 
@@ -680,75 +659,14 @@ export default function ResultPage() {
       setFoundWords(processed);
       setCurrentSingleIndex(0);
       setLoadingKeywords(false);
-
-      if (isFromHistory && resultData.historyVideoUrl) {
-        setLoadingSentenceVideo(false);
-        setSentenceVideoUrl(resultData.historyVideoUrl);
-        return;
-      }
-
-      try {
-        const filenames = processed
-          .map((x) => (x.pose_filename ?? "").trim())
-          .filter(Boolean);
-
-        if (filenames.length === 0) {
-          if (cancelled) return;
-          setLoadingSentenceVideo(false);
-          setNewBlobUrl(null);
-          return;
-        }
-
-        const resp = await fetch(buildApiUrl("concat_video"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            pose_filenames: filenames,
-            output_name: "sentence.mp4",
-          }),
-          signal: abort.signal,
-        });
-
-        if (!resp.ok) {
-          const text = await resp.text();
-          console.error("concat_video failed:", resp.status, text);
-          if (cancelled) return;
-          setLoadingSentenceVideo(false);
-          setNewBlobUrl(null);
-          return;
-        }
-
-        const blob = await resp.blob();
-        const url = URL.createObjectURL(blob);
-
-        if (cancelled) {
-          URL.revokeObjectURL(url);
-          return;
-        }
-
-        setNewBlobUrl(url);
-        setLoadingSentenceVideo(false);
-      } catch (e: any) {
-        if (e?.name === "AbortError") return;
-        console.error("concat_video error:", e);
-        if (cancelled) return;
-        setLoadingSentenceVideo(false);
-        setNewBlobUrl(null);
-      }
     };
 
     run();
 
     return () => {
       cancelled = true;
-      abort.abort();
-      if (prevBlobUrl.current && prevBlobUrl.current.startsWith("blob:")) {
-        URL.revokeObjectURL(prevBlobUrl.current);
-      }
     };
   }, [
-    isFromHistory,
-    resultData.historyVideoUrl,
     resultData.summary,
     resultData.thsl_fixed,
     resultData.keywords,
@@ -767,12 +685,61 @@ export default function ResultPage() {
       ? poseItems[Math.min(currentSingleIndex, poseItems.length - 1)]
       : null;
 
-  const handleDownloadSentenceVideo = () => {
-    if (!sentenceVideoUrl) return;
-    const a = document.createElement("a");
-    a.href = sentenceVideoUrl;
-    a.download = "sentence.mp4";
-    a.click();
+  const handleDownloadSentenceVideo = async () => {
+    try {
+      if (isFromHistory && resultData.historyVideoUrl) {
+        const a = document.createElement("a");
+        a.href = resultData.historyVideoUrl;
+        a.download = "sentence.mp4";
+        a.click();
+        return;
+      }
+
+      const filenames = foundWords
+        .map((x) => (x.pose_filename ?? "").trim())
+        .filter(Boolean);
+
+      if (filenames.length === 0) {
+        toast.error("ไม่พบไฟล์ pose สำหรับสร้างวิดีโอ");
+        return;
+      }
+
+      setLoadingSentenceVideo(true);
+
+      const resp = await fetch(buildApiUrl("render_sentence_mp4"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pose_filenames: filenames,
+          output_name: "sentence.mp4",
+        }),
+      });
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        console.error("render_sentence_mp4 failed:", resp.status, text);
+        throw new Error(text || "render_sentence_mp4 failed");
+      }
+
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+
+      setNewBlobUrl(url);
+
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "sentence.mp4";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+
+      toast.success("ดาวน์โหลดวิดีโอทั้งประโยคสำเร็จ");
+    } catch (e) {
+      console.error("download mp4 error:", e);
+      toast.error("ดาวน์โหลดวิดีโอทั้งประโยคไม่สำเร็จ");
+    } finally {
+      setLoadingSentenceVideo(false);
+    }
   };
 
   const handleBackToTranslate = () => {
@@ -891,12 +858,21 @@ export default function ResultPage() {
               </div>
 
               <Button
-                disabled={!sentenceVideoUrl}
+                disabled={loadingSentenceVideo || poseItems.length === 0}
                 className="w-full bg-[#0F1F2F] hover:bg-[#1a2f44] text-white text-sm disabled:opacity-50 transition-colors"
                 onClick={handleDownloadSentenceVideo}
               >
-                <Download size={16} className="mr-2" />
-                ดาวน์โหลดวิดีโอทั้งประโยค (.mp4)
+                {loadingSentenceVideo ? (
+                  <>
+                    <RefreshCw size={16} className="mr-2 animate-spin" />
+                    กำลังสร้างไฟล์ mp4...
+                  </>
+                ) : (
+                  <>
+                    <Download size={16} className="mr-2" />
+                    ดาวน์โหลดวิดีโอทั้งประโยค (.mp4)
+                  </>
+                )}
               </Button>
             </motion.div>
           )}
