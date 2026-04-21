@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Download, Video, RefreshCw } from "lucide-react";
+import { ArrowLeft, Download, Video, RefreshCw, Pause, Play } from "lucide-react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -282,6 +282,23 @@ function getEmotionFromWord(word: string): Emotion {
   return "neutral";
 }
 
+function getEmotionLabelThai(emotion: Emotion): string {
+  switch (emotion) {
+    case "happy":
+      return "ดีใจ";
+    case "sad":
+      return "เสียใจ";
+    case "angry":
+      return "โกรธ";
+    case "surprised":
+      return "ตกใจ";
+    case "question":
+      return "สงสัย";
+    default:
+      return "ปกติ";
+  }
+}
+
 export default function ResultPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -292,8 +309,10 @@ export default function ResultPage() {
   const [loadingKeywords, setLoadingKeywords] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("sentence");
   const [currentSingleIndex, setCurrentSingleIndex] = useState(0);
+  const [currentSentenceIndex, setCurrentSentenceIndex] = useState(0);
+  const [sentencePlaying, setSentencePlaying] = useState(true);
+  const [singlePlaying, setSinglePlaying] = useState(true);
 
-  // สำหรับดาวน์โหลด mp4
   const [loadingSentenceVideo, setLoadingSentenceVideo] = useState(false);
   const [sentenceVideoUrl, setSentenceVideoUrl] = useState<string | null>(null);
 
@@ -685,6 +704,20 @@ export default function ResultPage() {
       ? poseItems[Math.min(currentSingleIndex, poseItems.length - 1)]
       : null;
 
+  const currentSentenceItem =
+    poseItems.length > 0
+      ? poseItems[Math.min(currentSentenceIndex, poseItems.length - 1)]
+      : null;
+
+  useEffect(() => {
+    setSentencePlaying(true);
+    setCurrentSentenceIndex(0);
+  }, [poseItems.length, resultData.summary]);
+
+  useEffect(() => {
+    setSinglePlaying(true);
+  }, [currentSingleIndex, currentSingleItem?.label]);
+
   const handleDownloadSentenceVideo = async () => {
     try {
       if (isFromHistory && resultData.historyVideoUrl) {
@@ -831,31 +864,73 @@ export default function ResultPage() {
                 </div>
               </div>
 
-              <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden mb-4 border border-white/10 shadow-inner">
-                {loadingKeywords ? (
+              {loadingKeywords ? (
+                <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden mb-4 border border-white/10 shadow-inner">
                   <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
                     <RefreshCw className="animate-spin mb-2" />
                     <span className="text-xs">กำลังเตรียมท่าภาษามือ...</span>
                   </div>
-                ) : poseItems.length > 0 ? (
-                  <PosePlayer
-                    key={`sentence-${poseItems.length}-${resultData.summary ?? ""}`}
-                    items={poseItems}
-                    width={640}
-                    height={360}
-                    fps={46}
-                    confThreshold={0.05}
-                    flipY={false}
-                    loopPlaylist={true}
-                    loopPose={false}
-                  />
-                ) : (
+                </div>
+              ) : poseItems.length > 0 ? (
+                <>
+                  <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden border border-white/10 shadow-inner">
+                    <PosePlayer
+                      key={`sentence-${poseItems.length}-${resultData.summary ?? ""}`}
+                      items={poseItems}
+                      width={640}
+                      height={360}
+                      fps={46}
+                      confThreshold={0.05}
+                      flipY={false}
+                      loopPlaylist={false}
+                      loopPose={false}
+                      playing={sentencePlaying}
+                      onSequenceStepChange={setCurrentSentenceIndex}
+                      onSequenceEnd={() => setSentencePlaying(false)}
+                    />
+                  </div>
+
+                  <div className="mt-3 mb-4 rounded-2xl border border-white/40 
+                    bg-gradient-to-r from-[#F8FAFC] to-[#EEF2FF] 
+                    px-4 py-3 shadow-[0_8px_20px_rgba(15,31,47,0.12)] backdrop-blur">
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      <button
+                        onClick={() => setSentencePlaying((v) => !v)}
+                        className="inline-flex h-9 w-9 items-center justify-center 
+                          rounded-full 
+                          bg-gradient-to-br from-[#2563EB] to-[#1E40AF] 
+                          text-white shadow-md 
+                          hover:scale-105 active:scale-95 
+                          transition-all"
+                        aria-label={sentencePlaying ? "Pause" : "Play"}
+                      >
+                        {sentencePlaying ? <Pause size={14} /> : <Play size={14} />}
+                      </button>
+
+                      {poseItems.length > 0 && (
+                        <span className="rounded-xl border border-[#94A3B8] bg-[#F8FAFC] px-3 py-2 text-[11px] font-medium text-[#0F1F2F] shadow-sm">
+                          ลำดับคำที่แสดง: {currentSentenceIndex + 1}/{poseItems.length}
+                        </span>
+                      )}
+
+                      <span className="rounded-lg border border-[#94A3B8] bg-[#F8FAFC] px-3 py-2 text-[11px] font-medium text-[#0F1F2F] shadow-sm">
+                        คำที่กำลังแสดง: {currentSentenceItem?.label ?? "-"}
+                      </span>
+
+                      <span className="rounded-lg border border-[#94A3B8] bg-[#F8FAFC] px-3 py-2 text-[11px] font-medium text-[#0F1F2F] shadow-sm">
+                        สีหน้า: {getEmotionLabelThai(currentSentenceItem?.emotion ?? "neutral")}
+                      </span>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden mb-4 border border-white/10 shadow-inner">
                   <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
                     <span className="text-3xl mb-2">🚫</span>
                     <span className="text-xs">ไม่พบท่าภาษามือสำหรับประโยคนี้</span>
                   </div>
-                )}
-              </div>
+                </div>
+              )}
 
               <Button
                 disabled={loadingSentenceVideo || poseItems.length === 0}
@@ -891,30 +966,65 @@ export default function ResultPage() {
                 </div>
               </div>
 
-              <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden mb-4 border border-white/10 shadow-inner">
-                {loadingKeywords ? (
+              {loadingKeywords ? (
+                <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden mb-4 border border-white/10 shadow-inner">
                   <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
                     <RefreshCw className="animate-spin mb-2" />
                     <span className="text-xs">กำลังค้นหาท่าภาษามือ...</span>
                   </div>
-                ) : currentSingleItem ? (
-                  <PosePlayer
-                    key={`single-${currentSingleIndex}-${currentSingleItem.label}`}
-                    poseUrl={currentSingleItem.url}
-                    width={640}
-                    height={360}
-                    fps={24}
-                    confThreshold={0.05}
-                    flipY={false}
-                    emotion={currentSingleItem.emotion}
-                  />
-                ) : (
+                </div>
+              ) : currentSingleItem ? (
+                <>
+                  <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden border border-white/10 shadow-inner">
+                    <PosePlayer
+                      key={`single-${currentSingleIndex}-${currentSingleItem.label}`}
+                      poseUrl={currentSingleItem.url}
+                      width={640}
+                      height={360}
+                      fps={24}
+                      confThreshold={0.05}
+                      flipY={false}
+                      emotion={currentSingleItem.emotion}
+                      playing={singlePlaying}
+                      onSequenceEnd={() => setSinglePlaying(false)}
+                    />
+                  </div>
+
+                  <div className="mt-3 mb-4 rounded-2xl border border-white/40 
+                    bg-gradient-to-r from-[#F8FAFC] to-[#EEF2FF] 
+                    px-4 py-3 shadow-[0_8px_20px_rgba(15,31,47,0.12)] backdrop-blur">
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      <button
+                        onClick={() => setSentencePlaying((v) => !v)}
+                        className="inline-flex h-9 w-9 items-center justify-center 
+                          rounded-full 
+                          bg-gradient-to-br from-[#2563EB] to-[#1E40AF] 
+                          text-white shadow-md 
+                          hover:scale-105 active:scale-95 
+                          transition-all"
+                        aria-label={sentencePlaying ? "Pause" : "Play"}
+                      >
+                        {sentencePlaying ? <Pause size={14} /> : <Play size={14} />}
+                      </button>
+
+                      <span className="rounded-lg border border-[#94A3B8] bg-[#F8FAFC] px-3 py-2 text-[11px] font-medium text-[#0F1F2F] shadow-sm">
+                        คำ: {currentSingleItem.label}
+                      </span>
+
+                      <span className="rounded-lg border border-[#94A3B8] bg-[#F8FAFC] px-3 py-2 text-[11px] font-medium text-[#0F1F2F] shadow-sm">
+                        สีหน้า: {getEmotionLabelThai(currentSingleItem.emotion ?? "neutral")}
+                      </span>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden mb-4 border border-white/10 shadow-inner">
                   <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
                     <span className="text-3xl mb-2">🚫</span>
                     <span className="text-xs">ไม่พบไฟล์ท่าทาง หรือยังไม่ได้เลือกคำศัพท์</span>
                   </div>
-                )}
-              </div>
+                </div>
+              )}
             </motion.div>
           )}
 

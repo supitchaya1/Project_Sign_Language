@@ -35,8 +35,9 @@ type Props = {
 
   emotion?: Emotion;
 
-  // เพิ่มสำหรับ export
+  playing?: boolean;
   onSequenceEnd?: () => void;
+  onSequenceStepChange?: (index: number) => void;
 };
 
 type Point = { x: number; y: number; z: number; c: number };
@@ -248,7 +249,9 @@ export default function PosePlayer({
   loopPose = true,
   flipY = false,
   emotion = "neutral",
+  playing: controlledPlaying,
   onSequenceEnd,
+  onSequenceStepChange,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -264,6 +267,7 @@ export default function PosePlayer({
   const [viewMode, setViewMode] = useState<ViewMode>("FULL");
   const [showFingerColors, setShowFingerColors] = useState(true);
   const [lockCamera, setLockCamera] = useState(true);
+  const [isMobile, setIsMobile] = useState(false);
 
   const posRef = useRef(0);
   const reqIdRef = useRef<number>(0);
@@ -271,6 +275,7 @@ export default function PosePlayer({
 
   const smoothPtsRef = useRef<Point[] | null>(null);
   const endCalledRef = useRef(false);
+  const prevControlledPlayingRef = useRef<boolean | undefined>(undefined);
 
   const bboxRef = useRef<{
     minX: number;
@@ -298,12 +303,69 @@ export default function PosePlayer({
   };
 
   useEffect(() => {
+    const media = window.matchMedia("(max-width: 767px)");
+
+    const updateMobile = () => {
+      setIsMobile(media.matches);
+    };
+
+    updateMobile();
+
+    if (media.addEventListener) {
+      media.addEventListener("change", updateMobile);
+      return () => media.removeEventListener("change", updateMobile);
+    } else {
+      media.addListener(updateMobile);
+      return () => media.removeListener(updateMobile);
+    }
+  }, []);
+
+  useEffect(() => {
     bboxRef.current = null;
   }, [viewMode, currentUrlIndex]);
 
   useEffect(() => {
-    setPlaying(autoPlay);
-  }, [autoPlay]);
+    if (typeof controlledPlaying === "boolean") {
+      const wasPlaying = prevControlledPlayingRef.current;
+      const isStartingAgain = wasPlaying === false && controlledPlaying === true;
+
+      if (isStartingAgain) {
+        const endedCurrentClip = frames.length > 0 && posRef.current >= frames.length - 1;
+        const endedEntirePlaylist =
+          resolvedPlaylist.length > 1 &&
+          currentUrlIndex === resolvedPlaylist.length - 1 &&
+          frames.length > 0 &&
+          posRef.current >= frames.length - 1;
+
+        if (endedCurrentClip || endedEntirePlaylist) {
+          posRef.current = 0;
+          setCurrentUrlIndex(0);
+          smoothPtsRef.current = null;
+          bboxRef.current = null;
+          handAnchorRef.current = { L: { dx: 0, dy: 0 }, R: { dx: 0, dy: 0 } };
+          lastTimeRef.current = 0;
+          endCalledRef.current = false;
+          onSequenceStepChange?.(0);
+        }
+      }
+
+      setPlaying(controlledPlaying);
+      prevControlledPlayingRef.current = controlledPlaying;
+    } else {
+      setPlaying(autoPlay);
+    }
+  }, [
+    controlledPlaying,
+    autoPlay,
+    frames.length,
+    resolvedPlaylist.length,
+    currentUrlIndex,
+    onSequenceStepChange,
+  ]);
+
+  useEffect(() => {
+    onSequenceStepChange?.(currentUrlIndex);
+  }, [currentUrlIndex, onSequenceStepChange]);
 
   useEffect(() => {
     endCalledRef.current = false;
@@ -432,13 +494,16 @@ export default function PosePlayer({
       if (posRef.current >= frames.length) {
         if (resolvedPlaylist.length > 1) {
           if (currentUrlIndex < resolvedPlaylist.length - 1) {
-            setCurrentUrlIndex((p) => p + 1);
+            const nextIndex = currentUrlIndex + 1;
+            setCurrentUrlIndex(nextIndex);
+            onSequenceStepChange?.(nextIndex);
             posRef.current = 0;
             return;
           }
 
           if (loopPlaylist) {
             setCurrentUrlIndex(0);
+            onSequenceStepChange?.(0);
             posRef.current = 0;
             endCalledRef.current = false;
             return;
@@ -451,6 +516,7 @@ export default function PosePlayer({
           if (loopPose) {
             posRef.current = 0;
             endCalledRef.current = false;
+            onSequenceStepChange?.(0);
           } else {
             posRef.current = maxIndex;
             if (playing) setPlaying(false);
@@ -537,6 +603,7 @@ export default function PosePlayer({
     emotion,
     playlistItems,
     onSequenceEnd,
+    onSequenceStepChange,
   ]);
 
   const drawBgGradient = (
@@ -645,7 +712,7 @@ export default function PosePlayer({
     let minY = Infinity;
     let maxY = -Infinity;
 
-    const thrBBox = threshold * 0.65;
+    const thrBBox = mode === "FULL" ? threshold * 0.45 : threshold * 0.65;
 
     for (const idx of indicesForBBox) {
       const p = pts[idx];
@@ -658,7 +725,7 @@ export default function PosePlayer({
 
     if (!isFinite(minX)) return;
 
-    const paddingPx = Math.min(cw, ch) * 0.1;
+    const paddingPx = Math.min(cw, ch) * (isMobile ? 0.12 : 0.1);
 
     const prev = bboxRef.current;
     if (!prev) {
@@ -687,8 +754,21 @@ export default function PosePlayer({
       (ch - paddingPx * 2) / bodyH
     );
 
-    const minMul = lockCam ? 0.9 : 0.7;
-    const maxMul = lockCam ? 1.05 : 1.35;
+    const minMul = lockCam
+      ? isMobile
+        ? 0.9
+        : 0.9
+      : isMobile
+      ? 0.7
+      : 0.7;
+
+    const maxMul = lockCam
+      ? isMobile
+        ? 1.1
+        : 1.05
+      : isMobile
+      ? 1.2
+      : 1.35;
 
     const cx = (bb.minX + bb.maxX) / 2;
     const cy = (bb.minY + bb.maxY) / 2;
@@ -1005,66 +1085,25 @@ export default function PosePlayer({
   };
 
   if (err) {
-    return (
-      <div className="text-red-400 text-xs p-4 bg-black/20 rounded">
-        {err}
-      </div>
-    );
+    return <div className="text-red-400 text-xs p-4 bg-black/20 rounded">{err}</div>;
   }
-
-  const currentLabel = playlistItems[currentUrlIndex]?.label;
-  const currentEmotion =
-    playlistItems[currentUrlIndex]?.emotion ?? emotion ?? "neutral";
 
   return (
     <div className={`relative w-full h-full ${className}`}>
-      <div className="w-full h-full flex flex-col items-center">
-        <canvas
-          ref={canvasRef}
-          width={width}
-          height={height}
-          className="rounded-lg shadow-lg bg-[#0F1F2F]"
-          style={{
-            width: exportMode ? `${width}px` : "100%",
-            height: exportMode ? `${height}px` : "100%",
-          }}
-        />
-
-        {!exportMode && (
-          <div className="flex gap-2 mt-2 items-center opacity-80 hover:opacity-100 transition-opacity flex-wrap justify-center">
-            <button
-              onClick={() => setPlaying(!playing)}
-              className="text-[11px] bg-white/12 hover:bg-white/20 px-3 py-1.5 rounded-md text-white border border-white/10"
-            >
-              {playing ? "Pause" : "Play"}
-            </button>
-
-            {resolvedPlaylist.length > 1 && (
-              <span className="text-[11px] text-white/55">
-                Sequence: {currentUrlIndex + 1}/{resolvedPlaylist.length}
-              </span>
-            )}
-
-            {currentLabel && (
-              <span className="text-[11px] text-white/75 bg-white/10 px-2 py-1 rounded-md border border-white/10">
-                คำ: {currentLabel}
-              </span>
-            )}
-
-            <span className="text-[11px] text-white/75 bg-white/10 px-2 py-1 rounded-md border border-white/10">
-              สีหน้า: {currentEmotion}
-            </span>
-          </div>
-        )}
-      </div>
+      <canvas
+        ref={canvasRef}
+        width={width}
+        height={height}
+        className="w-full h-full rounded-lg shadow-lg bg-[#0F1F2F]"
+      />
 
       {!exportMode && (
         <>
           <button
             onClick={() => setPanelOpen((v) => !v)}
             className="absolute top-3 right-3 z-50 rounded-xl px-4 py-2 text-[12px] font-semibold
-                       bg-white text-black shadow-lg hover:shadow-xl active:scale-[0.98]
-                       border border-black/10"
+                      bg-white text-black shadow-lg hover:shadow-xl active:scale-[0.98]
+                      border border-black/10"
             aria-label="Toggle options panel"
             title="ตัวเลือก"
           >
@@ -1119,21 +1158,6 @@ export default function PosePlayer({
                 >
                   ครึ่งตัวบน (หัวถึงเอว/สะโพก)
                 </button>
-
-                <button
-                  onClick={() => {
-                    resetCamera();
-                    setViewMode("HEAD_TORSO");
-                  }}
-                  className={[
-                    "w-full rounded-lg px-3 py-2 text-[12px] font-semibold border",
-                    viewMode === "HEAD_TORSO"
-                      ? "bg-white text-black border-white/20"
-                      : "bg-white/10 text-white border-white/10 hover:bg-white/15",
-                  ].join(" ")}
-                >
-                  หน้าและลำตัว
-                </button>
               </div>
 
               <button
@@ -1176,7 +1200,6 @@ export default function PosePlayer({
                     <details
                       key={f.name}
                       className="rounded-lg border border-white/10 bg-white/8 px-3 py-2"
-                      open={false}
                     >
                       <summary className="cursor-pointer list-none flex items-center gap-2 text-white/90 text-[12px] font-semibold">
                         <span
