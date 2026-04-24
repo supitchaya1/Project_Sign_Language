@@ -7,7 +7,9 @@ type Emotion =
   | "sad"
   | "angry"
   | "surprised"
-  | "question";
+  | "question"
+  | "fear"
+  | "laugh";
 
 type PlaylistItem = {
   url: string;
@@ -183,53 +185,28 @@ function getBBoxIndices(mode: ViewMode) {
 function getFaceStyle(emotion: Emotion): FaceStyle {
   switch (emotion) {
     case "happy":
-      return {
-        browTilt: -1.5,
-        browLift: 0,
-        eyeOpen: 0.95,
-        mouthCurve: 8,
-        mouthOpen: 2,
-      };
+      return { browTilt: -1.5, browLift: 2, eyeOpen: 1, mouthCurve: 9, mouthOpen: 5 };
+
+    case "laugh":
+      return { browTilt: -0.1, browLift: 1, eyeOpen: 0.5, mouthCurve: 12, mouthOpen: 9 };
+
     case "sad":
-      return {
-        browTilt: 2.5,
-        browLift: 2,
-        eyeOpen: 0.72,
-        mouthCurve: -7,
-        mouthOpen: 1.5,
-      };
+      return { browTilt: -4, browLift: 3, eyeOpen: 0.58, mouthCurve: -8, mouthOpen: 1 };
+
     case "angry":
-      return {
-        browTilt: 5.5,
-        browLift: -2,
-        eyeOpen: 0.68,
-        mouthCurve: -3,
-        mouthOpen: 1,
-      };
+      return { browTilt: 5.5, browLift: -2, eyeOpen: 0.68, mouthCurve: -3, mouthOpen: 1 };
+
     case "surprised":
-      return {
-        browTilt: 0,
-        browLift: 5,
-        eyeOpen: 1.2,
-        mouthCurve: 0,
-        mouthOpen: 8,
-      };
+      return { browTilt: 0, browLift: 7, eyeOpen: 1.35, mouthCurve: 0, mouthOpen: 6 };
+
     case "question":
-      return {
-        browTilt: -3,
-        browLift: 3,
-        eyeOpen: 1,
-        mouthCurve: 1,
-        mouthOpen: 2.5,
-      };
+      return { browTilt: -3.5, browLift: 5, eyeOpen: 1.5, mouthCurve: 2, mouthOpen: 1.8 };
+
+    case "fear":
+      return {browTilt: -5.5,browLift: 6,eyeOpen: 1.28,mouthCurve: -2,mouthOpen: 2};
+
     default:
-      return {
-        browTilt: 0,
-        browLift: 0,
-        eyeOpen: 1,
-        mouthCurve: 3.5,
-        mouthOpen: 1.2,
-      };
+      return { browTilt: 0, browLift: 0, eyeOpen: 1, mouthCurve: 3.5, mouthOpen: 1.2 };
   }
 }
 
@@ -1043,39 +1020,55 @@ export default function PosePlayer({
 
         const mouthCx = (mx1 + mx2) / 2;
         const mouthCy = (my1 + my2) / 2;
-        const mouthW = Math.max(10, Math.hypot(mx2 - mx1, my2 - my1));
-
+        const mouthW = Math.max(14, Math.hypot(mx2 - mx1, my2 - my1));
         const curve = faceStyle.mouthCurve;
         const open = faceStyle.mouthOpen;
 
-        ctx.strokeStyle = COLORS.mouthOutline;
-        ctx.lineWidth = 5.5;
         ctx.lineCap = "round";
-        ctx.beginPath();
-        ctx.moveTo(mx1, my1);
-        ctx.quadraticCurveTo(mouthCx, mouthCy + curve, mx2, my2);
-        ctx.stroke();
+        ctx.lineJoin = "round";
 
-        ctx.strokeStyle = COLORS.mouth;
-        ctx.lineWidth = 3.6;
-        ctx.beginPath();
-        ctx.moveTo(mx1, my1);
-        ctx.quadraticCurveTo(mouthCx, mouthCy + curve, mx2, my2);
-        ctx.stroke();
-
-        if (open > 3) {
+        if (activeEmotion === "laugh") {
           ctx.beginPath();
-          ctx.ellipse(
-            mouthCx,
-            mouthCy + curve * 0.35,
-            mouthW * 0.18,
-            open,
-            0,
-            0,
-            Math.PI * 2
-          );
-          ctx.fillStyle = "rgba(120,0,0,0.45)";
+          ctx.ellipse(mouthCx, mouthCy + 5, mouthW * 0.34, open, 0, 0, Math.PI * 2);
+          ctx.fillStyle = "rgba(90,0,0,0.62)";
           ctx.fill();
+
+          ctx.beginPath();
+          ctx.arc(mouthCx, mouthCy + 7, mouthW * 0.20, 0, Math.PI);
+          ctx.fillStyle = "rgba(255,255,255,0.9)";
+          ctx.fill();
+        } else if (activeEmotion === "surprised") {
+          ctx.beginPath();
+          ctx.ellipse(mouthCx, mouthCy + 3, mouthW * 0.20, open, 0, 0, Math.PI * 2);
+          ctx.fillStyle = "rgba(80,0,0,0.58)";
+          ctx.fill();
+
+          ctx.strokeStyle = COLORS.mouth;
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        } else if (activeEmotion === "fear") {
+          ctx.beginPath();
+
+          ctx.strokeStyle = "rgba(174, 9, 9, 0.7)";
+          ctx.lineWidth = 3.5;
+          ctx.beginPath();
+          ctx.moveTo(mx1 + 2, my1 + 2);
+          ctx.quadraticCurveTo(mouthCx, mouthCy, mx2 - 2, my2 + 2);
+          ctx.stroke();
+        } else {
+          ctx.strokeStyle = COLORS.mouthOutline;
+          ctx.lineWidth = 5.5;
+          ctx.beginPath();
+          ctx.moveTo(mx1, my1);
+          ctx.quadraticCurveTo(mouthCx, mouthCy + curve, mx2, my2);
+          ctx.stroke();
+
+          ctx.strokeStyle = COLORS.mouth;
+          ctx.lineWidth = 3.6;
+          ctx.beginPath();
+          ctx.moveTo(mx1, my1);
+          ctx.quadraticCurveTo(mouthCx, mouthCy + curve, mx2, my2);
+          ctx.stroke();
         }
       }
     }
@@ -1259,6 +1252,12 @@ export default function PosePlayer({
                   </div>
                   <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
                     question = สงสัย / คำถาม
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
+                    fear = กลัว
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
+                    laugh = หัวเราะ
                   </div>
                 </div>
               </div>

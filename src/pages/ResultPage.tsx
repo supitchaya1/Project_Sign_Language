@@ -75,7 +75,9 @@ type Emotion =
   | "sad"
   | "angry"
   | "surprised"
-  | "question";
+  | "question"
+  | "fear"
+  | "laugh";
 
 type PosePlaylistItem = {
   url: string;
@@ -271,6 +273,22 @@ function getEmotionFromWord(word: string): Emotion {
     "ยังไง",
     "ไหม",
     "หรือยัง",
+    "สงสัย",
+  ]);
+
+  const fearWords = new Set([
+    "กลัว",
+    "หวาดกลัว",
+    "ตกใจกลัว",
+    "กังวล",
+    "หวาดระแวง",
+  ]);
+
+  const laughWords = new Set([
+    "หัวเราะ",
+    "ขำ",
+    "ตลก",
+    "ฮา",
   ]);
 
   if (angryWords.has(w)) return "angry";
@@ -278,6 +296,8 @@ function getEmotionFromWord(word: string): Emotion {
   if (happyWords.has(w)) return "happy";
   if (surprisedWords.has(w)) return "surprised";
   if (questionWords.has(w)) return "question";
+  if (fearWords.has(w)) return "fear";
+  if (laughWords.has(w)) return "laugh";
 
   return "neutral";
 }
@@ -294,6 +314,10 @@ function getEmotionLabelThai(emotion: Emotion): string {
       return "ตกใจ";
     case "question":
       return "สงสัย";
+    case "fear":
+      return "กลัว";
+    case "laugh":
+      return "หัวเราะ";  
     default:
       return "ปกติ";
   }
