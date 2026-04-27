@@ -1094,9 +1094,9 @@ export default function PosePlayer({
         <>
           <button
             onClick={() => setPanelOpen((v) => !v)}
-            className="absolute top-3 right-3 z-50 rounded-xl px-4 py-2 text-[12px] font-semibold
-                      bg-white text-black shadow-lg hover:shadow-xl active:scale-[0.98]
-                      border border-black/10"
+            className="absolute top-3 right-3 md:top-3 md:right-3 z-50 rounded-lg md:rounded-xl px-2 py-1 md:px-4 md:py-2 text-[10px] md:text-[12px] font-semibold
+            bg-white text-black shadow-lg hover:shadow-xl active:scale-[0.98]
+            border border-black/10"
             aria-label="Toggle options panel"
             title="ตัวเลือก"
           >
@@ -1111,10 +1111,13 @@ export default function PosePlayer({
                 ? "translate-x-0 pointer-events-auto"
                 : "translate-x-full pointer-events-none",
             ].join(" ")}
-            style={{ width: 320 }}
+            style={{
+              width: isMobile ? "78%" : 320,
+              maxWidth: isMobile ? "260px" : "320px",
+            }}
           >
             <div
-              className="h-full bg-black/55 backdrop-blur-md border-l border-white/10 p-3 pt-14 overflow-y-auto overscroll-contain"
+              className="h-full bg-black/55 backdrop-blur-md border-l border-white/10 p-2 md:p-3 pt-12 md:pt-14 overflow-y-auto overscroll-contain"
               style={{ WebkitOverflowScrolling: "touch" }}
             >
               <div className="flex items-center justify-between mb-2">
@@ -1234,7 +1237,7 @@ export default function PosePlayer({
                 <div className="text-white font-semibold text-sm mb-2">
                   ตัวอย่าง emotion
                 </div>
-                <div className="space-y-2 text-[11px] text-white/80">
+                <div className="space-y-1.5 md:space-y-2 text-[10px] md:text-[11px] text-white/80">
                   <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2">
                     neutral = ปกติ
                   </div>

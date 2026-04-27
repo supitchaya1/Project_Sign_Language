@@ -885,7 +885,7 @@ export default function ResultPage() {
                       items={poseItems}
                       width={640}
                       height={360}
-                      fps={46}
+                      fps={42} //ความเร็ววิดีโอ
                       confThreshold={0.05}
                       flipY={false}
                       loopPlaylist={false}
