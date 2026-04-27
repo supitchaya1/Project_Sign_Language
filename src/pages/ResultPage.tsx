@@ -7,6 +7,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
 import PosePlayer from "@/components/PosePlayer";
 import { toast } from "sonner";
+import { downloadCanvasAsGif } from "@/lib/downloadGif";
 
 import { THSL_RULES, Role as RuleRole, ThslRule } from "@/services/thslRules";
 import { saveHistory, type HistoryRecord } from "@/services/history";
@@ -339,7 +340,7 @@ export default function ResultPage() {
 
   const [loadingSentenceVideo, setLoadingSentenceVideo] = useState(false);
   const [sentenceVideoUrl, setSentenceVideoUrl] = useState<string | null>(null);
-
+  const [exportNonce, setExportNonce] = useState(0);
   const prevBlobUrl = useRef<string | null>(null);
   const savedOnceRef = useRef(false);
 
@@ -744,56 +745,37 @@ export default function ResultPage() {
 
   const handleDownloadSentenceVideo = async () => {
     try {
-      if (isFromHistory && resultData.historyVideoUrl) {
-        const a = document.createElement("a");
-        a.href = resultData.historyVideoUrl;
-        a.download = "sentence.mp4";
-        a.click();
-        return;
-      }
-
-      const filenames = foundWords
-        .map((x) => (x.pose_filename ?? "").trim())
-        .filter(Boolean);
-
-      if (filenames.length === 0) {
-        toast.error("ไม่พบไฟล์ pose สำหรับสร้างวิดีโอ");
-        return;
-      }
+      setViewMode("sentence");
+      setCurrentSentenceIndex(0);
+      setSentencePlaying(true);
+      setExportNonce((n) => n + 1);
 
       setLoadingSentenceVideo(true);
+      toast.info("กำลังสร้าง GIF ทั้งประโยค...");
 
-      const resp = await fetch(buildApiUrl("render_sentence_mp4"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pose_filenames: filenames,
-          output_name: "sentence.mp4",
-        }),
-      });
+      // รอให้ PosePlayer เริ่มเล่นใหม่และ canvas วาดเฟรมแรกก่อน
+      await new Promise((resolve) => setTimeout(resolve, 1500));
 
-      if (!resp.ok) {
-        const text = await resp.text();
-        console.error("render_sentence_mp4 failed:", resp.status, text);
-        throw new Error(text || "render_sentence_mp4 failed");
+      const canvas = document.querySelector("canvas") as HTMLCanvasElement | null;
+
+      if (!canvas) {
+        toast.error("ไม่พบ canvas สำหรับบันทึก GIF");
+        return;
       }
 
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
+      const gifDurationMs = Math.max(foundWords.length * 4500, 8000);
 
-      setNewBlobUrl(url);
+      await downloadCanvasAsGif(
+        canvas,
+        `${resultData.summary || "sentence"}.gif`,
+        gifDurationMs,
+        6
+      );
 
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "sentence.mp4";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-
-      toast.success("ดาวน์โหลดวิดีโอทั้งประโยคสำเร็จ");
-    } catch (e) {
-      console.error("download mp4 error:", e);
-      toast.error("ดาวน์โหลดวิดีโอทั้งประโยคไม่สำเร็จ");
+      toast.success("ดาวน์โหลด GIF สำเร็จ");
+    } catch (error) {
+      console.error("download gif error:", error);
+      toast.error("ดาวน์โหลด GIF ไม่สำเร็จ");
     } finally {
       setLoadingSentenceVideo(false);
     }
@@ -899,7 +881,7 @@ export default function ResultPage() {
                 <>
                   <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden border border-white/10 shadow-inner">
                     <PosePlayer
-                      key={`sentence-${poseItems.length}-${resultData.summary ?? ""}`}
+                      key={`sentence-${poseItems.length}-${resultData.summary ?? ""}-${exportNonce}`}
                       items={poseItems}
                       width={640}
                       height={360}
@@ -964,12 +946,12 @@ export default function ResultPage() {
                 {loadingSentenceVideo ? (
                   <>
                     <RefreshCw size={16} className="mr-2 animate-spin" />
-                    กำลังสร้างไฟล์ mp4...
+                    กำลังสร้างไฟล์ GIF...
                   </>
                 ) : (
                   <>
                     <Download size={16} className="mr-2" />
-                    ดาวน์โหลดวิดีโอทั้งประโยค (.mp4)
+                    ดาวน์โหลดวิดีโอทั้งประโยค (.GIF)
                   </>
                 )}
               </Button>
