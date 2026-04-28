@@ -7,7 +7,7 @@ import traceback
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from dotenv import load_dotenv
@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from supabase import create_client, Client
 from pose_format import Pose
+from openai import OpenAI
 
 # ถ้าจะใช้ /api/concat_video เดิม ต้อง uncomment บรรทัดนี้และให้ไฟล์มีจริง
 # from pose_concat.concat_poses import pose_sequence
@@ -23,6 +24,8 @@ from pose_format import Pose
 # 0) Load .env
 # =========================
 load_dotenv()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
@@ -384,7 +387,45 @@ def concat_video(req: ConcatRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"concat_video failed: {type(e).__name__}: {e}")
 
+@app.post("/api/transcribe-audio")
+async def transcribe_audio(file: UploadFile = File(...)):
+    if openai_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail="OPENAI_API_KEY is missing. Please set it in backend/.env"
+        )
 
+    if not file.content_type or not file.content_type.startswith("audio/"):
+        raise HTTPException(status_code=400, detail="กรุณาอัปโหลดไฟล์เสียงเท่านั้น")
+
+    suffix = Path(file.filename or "audio.webm").suffix or ".webm"
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp_path = tmp.name
+        tmp.write(await file.read())
+
+    try:
+        with open(tmp_path, "rb") as audio_file:
+            result = openai_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                language="th",
+            )
+
+        return {"text": result.text}
+
+    except Exception as e:
+        print("❌ transcribe error:", repr(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"แปลงเสียงเป็นข้อความไม่สำเร็จ: {type(e).__name__}"
+        )
+
+    finally:
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
 # =========================
 # NEW: Render PosePlayer canvas -> webm -> mp4
 # =========================
