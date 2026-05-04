@@ -11,7 +11,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { supabase } from "@/lib/supabase";
 
 declare namespace Intl {
   interface SegmentData {
@@ -80,6 +79,9 @@ type TranslatePageLocationState = {
   originalText?: string;
 };
 
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') || '';
+
 export default function TranslatePage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -89,7 +91,11 @@ export default function TranslatePage() {
   const [text, setText] = useState('');
 
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [showSummarizeErrorModal, setShowSummarizeErrorModal] = useState(false);
+  const [showTranslateErrorModal, setShowTranslateErrorModal] = useState(false);
+  const [translateErrorMessage, setTranslateErrorMessage] = useState(
+    'ไม่พบคำศัพท์ภาษามือที่รองรับในฐานข้อมูล'
+  );
+
   const [isProcessingFile, setIsProcessingFile] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -141,20 +147,6 @@ export default function TranslatePage() {
     }
 
     return s.split(/\s+/).slice(0, limit).join(' ');
-  };
-
-  const extractDirectKeywords = (input: string) => {
-    const s = input.trim();
-    if (!s) return [];
-
-    if (segmenter) {
-      return Array.from(segmenter.segment(s))
-        .filter((part) => part.isWordLike)
-        .map((part) => part.segment.trim())
-        .filter(Boolean);
-    }
-
-    return s.split(/\s+/).filter(Boolean);
   };
 
   const wordCount = getWordCount(text);
@@ -278,33 +270,18 @@ export default function TranslatePage() {
     toast.info('กำลังประมวลผลไฟล์เสียงด้วย Whisper AI...');
 
     try {
-      const arrayBuffer = await file.arrayBuffer();
-      const uint8Array = new Uint8Array(arrayBuffer);
-      let binary = '';
-      const chunkSize = 32768;
+      const formData = new FormData();
+      formData.append('file', file);
 
-      for (let i = 0; i < uint8Array.length; i += chunkSize) {
-        const chunk = uint8Array.slice(i, i + chunkSize);
-        binary += String.fromCharCode.apply(null, Array.from(chunk));
-      }
-
-      const base64Audio = btoa(binary);
-
-      const { data, error } = await supabase.functions.invoke('transcribe-audio', {
-        body: {
-          audio: base64Audio,
-          mimeType: file.type,
-        },
+      const res = await fetch(`${API_BASE_URL}/api/transcribe-audio`, {
+        method: 'POST',
+        body: formData,
       });
 
-      if (error) {
-        console.error('Edge function error:', error);
-        throw new Error(error.message || 'Failed to transcribe audio');
-      }
+      const data = await res.json().catch(() => null);
 
-      if (data?.error) {
-        console.error('API error:', data.error);
-        throw new Error(data.error);
+      if (!res.ok) {
+        throw new Error(data?.detail || 'แปลงไฟล์เสียงไม่สำเร็จ');
       }
 
       if (data?.text) {
@@ -341,58 +318,62 @@ export default function TranslatePage() {
       return;
     }
 
-    const inputWordCount = getWordCount(raw);
-
-    // 1–2 คำ: ส่งตรง ไม่เรียก summarize
-    if (inputWordCount <= 2) {
-      const directKeywords = extractDirectKeywords(raw);
-
-      navigate('/result', {
-        state: {
-          originalText: raw,
-          summary: raw,
-          thsl_fixed: raw,
-          keywords: directKeywords,
-        },
-      });
-      return;
-    }
-
     setIsSubmitting(true);
-    toast.info('กำลังสรุปข้อความด้วย TYPHOON AI...');
+    toast.info('กำลังตรวจคำศัพท์และสร้างภาษามือ...');
 
     try {
-      const { data, error } = await supabase.functions.invoke('summarize-text', {
-        body: { text: raw },
+      const res = await fetch(`${API_BASE_URL}/api/translate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text: raw }),
       });
 
-      if (error) {
-        console.error('Summarize error:', error);
-        throw new Error(error.message || 'Failed to summarize text');
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok || !data?.success) {
+        const message =
+          data?.detail ||
+          'ไม่พบคำศัพท์ภาษามือที่รองรับในฐานข้อมูล จึงไม่สามารถแสดงผลได้';
+
+        setTranslateErrorMessage(message);
+        setShowTranslateErrorModal(true);
+        return;
       }
 
-      if (data?.error) {
-        console.error('API error:', data.error);
-        throw new Error(data.error);
-      }
+      const poseFiles = data.pose_filenames || data.poseFiles || [];
+      const words = data.words || data.keywords || [];
 
-      if (!data?.found) {
-        setShowSummarizeErrorModal(true);
+      if (!Array.isArray(poseFiles) || poseFiles.length === 0) {
+        setTranslateErrorMessage(
+          'ไม่พบไฟล์ภาษามือที่สามารถแสดงผลได้ กรุณาลองข้อความอื่น'
+        );
+        setShowTranslateErrorModal(true);
         return;
       }
 
       navigate('/result', {
         state: {
-          originalText: raw,
-          summary: data.summary,
-          thsl_fixed: data.thsl_fixed,
-          keywords: data.keywords ?? [],
+          ...data,
+          originalText: data.original_text || raw,
+          inputText: data.input_text || raw,
+          summary: data.summary || data.processed_text || raw,
+          thsl_fixed: data.thsl_text || words.join(' '),
+          keywords: words,
+          words,
+          pose_filenames: poseFiles,
+          poseFiles,
+          pose_urls: data.pose_urls || [],
+          used_summary: !!data.used_summary,
         },
       });
     } catch (error) {
-      console.error('Error summarizing:', error);
-      toast.error('สร้างสรุปไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
-      setShowSummarizeErrorModal(true);
+      console.error('Error translating:', error);
+      setTranslateErrorMessage(
+        'เชื่อมต่อ backend ไม่สำเร็จ กรุณาตรวจสอบว่า backend เปิดอยู่'
+      );
+      setShowTranslateErrorModal(true);
     } finally {
       setIsSubmitting(false);
     }
@@ -586,23 +567,23 @@ export default function TranslatePage() {
       </Dialog>
 
       <Dialog
-        open={showSummarizeErrorModal}
-        onOpenChange={setShowSummarizeErrorModal}
+        open={showTranslateErrorModal}
+        onOpenChange={setShowTranslateErrorModal}
       >
         <DialogContent className="sm:max-w-md text-center bg-white dark:bg-[#1a2f44]">
           <div className="py-6">
-            <div className="text-5xl mb-4">📝</div>
+            <div className="text-5xl mb-4">🤟</div>
             <h2 className="text-lg font-bold text-[#263F5D] dark:text-white mb-2">
-              ขออภัย สร้างสรุปไม่สำเร็จ
+              ไม่สามารถแสดงผลภาษามือได้
             </h2>
             <p className="text-[#263F5D]/60 dark:text-white/60 mb-6 text-sm">
-              ระบบไม่สามารถสรุปข้อความได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง
+              {translateErrorMessage}
             </p>
             <Button
-              onClick={() => setShowSummarizeErrorModal(false)}
+              onClick={() => setShowTranslateErrorModal(false)}
               className="bg-[#0F1F2F] hover:bg-[#1a2f44] text-[#C9A7E3]"
             >
-              ลองอีกครั้ง
+              ลองใหม่อีกครั้ง
             </Button>
           </div>
         </DialogContent>

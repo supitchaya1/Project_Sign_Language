@@ -8,66 +8,16 @@ import { supabase } from "@/lib/supabase";
 import PosePlayer from "@/components/PosePlayer";
 import { toast } from "sonner";
 import { downloadCanvasAsGif } from "@/lib/downloadGif";
-
-import { THSL_RULES, Role as RuleRole, ThslRule } from "@/services/thslRules";
 import { saveHistory, type HistoryRecord } from "@/services/history";
 
 const API_BASE =
   (import.meta.env.VITE_BACKEND_BASE as string) ||
-  "http://127.0.0.1:8000/api";
-
-function joinUrl(base: string, path: string) {
-  const b = (base ?? "").trim().replace(/\/+$/, "");
-  const p = (path ?? "").trim().replace(/^\/+/, "");
-  return `${b}/${p}`;
-}
-
-function buildApiUrl(path: string) {
-  return joinUrl(API_BASE, path);
-}
+  (import.meta.env.VITE_API_BASE_URL as string) ||
+  "http://127.0.0.1:8000";
 
 function buildPoseUrl(filename: string) {
   const clean = (filename ?? "").trim();
-  return `${buildApiUrl("pose")}?name=${encodeURIComponent(clean)}`;
-}
-
-interface ResultState {
-  originalText?: string;
-  summary?: string;
-  keywords?: string[];
-  thsl_fixed?: string;
-}
-
-interface HistoryResultState {
-  fromHistory?: boolean;
-  historyItem?: HistoryRecord;
-  resultData?: {
-    text?: string;
-    summary?: string;
-    translatedText?: string;
-    keywords?: string[];
-    sentenceVideoUrl?: string;
-    thsl_fixed?: string;
-  };
-}
-
-interface WordData {
-  word: string;
-  category: string;
-  pose_filename: string;
-}
-
-interface ProcessedWordData {
-  word: string;
-  category: string;
-  pose_filename: string;
-  fullUrl: string;
-}
-
-interface CategoryRoleRow {
-  category: string;
-  role: string;
-  priority: number;
+  return `${API_BASE.replace(/\/$/, "")}/api/pose?name=${encodeURIComponent(clean)}`;
 }
 
 type Emotion =
@@ -84,185 +34,73 @@ type PosePlaylistItem = {
   url: string;
   label: string;
   emotion: Emotion;
+  role?: string;
 };
+
+interface ResultState {
+  success?: boolean;
+  originalText?: string;
+  original_text?: string;
+  inputText?: string;
+  input_text?: string;
+  summary?: string;
+  processed_text?: string;
+  thsl_fixed?: string;
+  thsl_text?: string;
+  keywords?: string[];
+  words?: string[];
+  matched_words?: string[];
+  thsl_words?: string[];
+  roles?: string[];
+  pose_filenames?: string[];
+  poseFiles?: string[];
+  pose_urls?: string[];
+  used_summary?: boolean;
+  summary_source?: string;
+  items?: Array<{
+    word?: string;
+    pose_filename?: string;
+    pose_url?: string;
+    category?: string;
+    role?: string;
+  }>;
+  poses?: Array<{
+    word?: string;
+    pose_filename?: string;
+    url?: string;
+    category?: string;
+    role?: string;
+  }>;
+}
+
+interface HistoryResultState {
+  fromHistory?: boolean;
+  historyItem?: HistoryRecord;
+  resultData?: {
+    text?: string;
+    summary?: string;
+    translatedText?: string;
+    keywords?: string[];
+    sentenceVideoUrl?: string;
+    thsl_fixed?: string;
+    pose_filenames?: string[];
+    poseFiles?: string[];
+    pose_urls?: string[];
+    roles?: string[];
+  };
+}
 
 function normalizeThaiToken(s: string) {
   return (s ?? "").replace(/\u200B|\u200C|\u200D|\uFEFF/g, "").trim();
 }
 
-function normalizeThaiText(s: string) {
-  return (s ?? "").replace(/\u200B|\u200C|\u200D|\uFEFF/g, "");
-}
-
-function cleanTokens(tokens: string[]) {
-  return (tokens || []).map(normalizeThaiToken).filter(Boolean);
-}
-
-function uniqPreserveOrder(tokens: string[]) {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const t of tokens) {
-    const x = normalizeThaiToken(t);
-    if (!x) continue;
-    if (seen.has(x)) continue;
-    seen.add(x);
-    out.push(x);
-  }
-  return out;
-}
-
-function isNumberToken(token: string) {
-  return /^[0-9]+$/.test(token);
-}
-
-function orderTokensByOriginalText(originalText: string, tokens: string[]) {
-  const text = normalizeThaiText(originalText);
-  return (tokens || [])
-    .map((t, i) => {
-      const token = normalizeThaiToken(t);
-      const idx = text.indexOf(token);
-      return { token, i, idx: idx >= 0 ? idx : 1e15 };
-    })
-    .sort((a, b) => (a.idx !== b.idx ? a.idx - b.idx : a.i - b.i))
-    .map((x) => x.token)
-    .filter(Boolean);
-}
-
-function segmentThaiWords(text: string): string[] {
-  const s = normalizeThaiText(text).trim();
-  if (!s) return [];
-
-  const Seg = (globalThis as any).Intl?.Segmenter;
-  if (typeof Seg === "function") {
-    const segmenter = new Seg("th", { granularity: "word" });
-    const out: string[] = [];
-    for (const part of segmenter.segment(s)) {
-      const isWordLike = (part as any).isWordLike;
-      if (isWordLike === false) continue;
-      const w = normalizeThaiToken((part as any).segment);
-      if (w) out.push(w);
-    }
-    return out;
-  }
-
-  return s.split(/\s+/).map(normalizeThaiToken).filter(Boolean);
-}
-
-function dropSubTokens(tokens: string[]) {
-  const tks = uniqPreserveOrder(tokens.map(normalizeThaiToken).filter(Boolean));
-  const sorted = tks.slice().sort((a, b) => b.length - a.length);
-
-  const kept: string[] = [];
-  for (const t of sorted) {
-    const isSub = kept.some((k) => k.includes(t) && k !== t);
-    if (!isSub) kept.push(t);
-  }
-
-  const keptSet = new Set(kept);
-  return tks.filter((t) => keptSet.has(t));
-}
-
-function normalizeDbRoleToRuleRole(dbRole: string): RuleRole {
-  const r = (dbRole ?? "").trim();
-  if (r === "Q") return "Q(?)";
-  if (r === "What") return "What(?)";
-  if (r === "Who") return "Who(?)";
-  if (r === "Whose") return "Whose(?)";
-  return r as RuleRole;
-}
-
-function rolesOf(tagged: { role: RuleRole | "UNK" }[]) {
-  return tagged.map((t) => t.role).filter((r) => r !== "UNK") as RuleRole[];
-}
-
-function findExactRule(tagged: { role: RuleRole | "UNK" }[]): ThslRule | null {
-  const pattern = rolesOf(tagged);
-
-  for (const rule of THSL_RULES) {
-    if (rule.thaiPattern.length !== pattern.length) continue;
-    let ok = true;
-    for (let i = 0; i < pattern.length; i++) {
-      if (pattern[i] !== rule.thaiPattern[i]) {
-        ok = false;
-        break;
-      }
-    }
-    if (ok) return rule;
-  }
-  return null;
-}
-
-function reorderByRule(
-  tagged: { word: string; role: RuleRole | "UNK" }[],
-  thslOrder: RuleRole[]
-) {
-  const used = new Set<number>();
-  const out: string[] = [];
-
-  for (const role of thslOrder) {
-    if ((role as any) === "Age/Year") {
-      const idxAge = tagged.findIndex(
-        (t, i) => !used.has(i) && t.role === ("Age" as any)
-      );
-      const idxYear = tagged.findIndex(
-        (t, i) => !used.has(i) && t.role === ("Year" as any)
-      );
-      if (idxAge >= 0) {
-        out.push(tagged[idxAge].word);
-        used.add(idxAge);
-        continue;
-      }
-      if (idxYear >= 0) {
-        out.push(tagged[idxYear].word);
-        used.add(idxYear);
-        continue;
-      }
-      continue;
-    }
-
-    const idx = tagged.findIndex((t, i) => !used.has(i) && t.role === role);
-    if (idx >= 0) {
-      out.push(tagged[idx].word);
-      used.add(idx);
-    }
-  }
-
-  tagged.forEach((t, i) => {
-    if (!used.has(i)) out.push(t.word);
-  });
-
-  return out.filter(Boolean);
-}
-
 function getEmotionFromWord(word: string): Emotion {
   const w = normalizeThaiToken(word);
 
-  const angryWords = new Set([
-    "โกรธ",
-    "โมโห",
-    "ไม่พอใจ",
-    "หงุดหงิด",
-    "ฉุนเฉียว",
-  ]);
-
-  const sadWords = new Set([
-    "เสียใจ",
-    "เศร้า",
-    "ร้องไห้",
-    "ทุกข์",
-    "ผิดหวัง",
-  ]);
-
-  const happyWords = new Set([
-    "ดีใจ",
-    "ยินดี",
-    "มีความสุข",
-    "สุข",
-    "ชอบ",
-  ]);
-
+  const angryWords = new Set(["โกรธ", "โมโห", "ไม่พอใจ", "หงุดหงิด", "ฉุนเฉียว"]);
+  const sadWords = new Set(["เสียใจ", "เศร้า", "ร้องไห้", "ทุกข์", "ผิดหวัง"]);
+  const happyWords = new Set(["ดีใจ", "ยินดี", "มีความสุข", "สุข", "ชอบ"]);
   const surprisedWords = new Set(["ตกใจ", "ประหลาดใจ", "ตะลึง"]);
-
   const questionWords = new Set([
     "ทำไม",
     "อะไร",
@@ -276,21 +114,8 @@ function getEmotionFromWord(word: string): Emotion {
     "หรือยัง",
     "สงสัย",
   ]);
-
-  const fearWords = new Set([
-    "กลัว",
-    "หวาดกลัว",
-    "ตกใจกลัว",
-    "กังวล",
-    "หวาดระแวง",
-  ]);
-
-  const laughWords = new Set([
-    "หัวเราะ",
-    "ขำ",
-    "ตลก",
-    "ฮา",
-  ]);
+  const fearWords = new Set(["กลัว", "หวาดกลัว", "ตกใจกลัว", "กังวล", "หวาดระแวง"]);
+  const laughWords = new Set(["หัวเราะ", "ขำ", "ตลก", "ฮา"]);
 
   if (angryWords.has(w)) return "angry";
   if (sadWords.has(w)) return "sad";
@@ -318,10 +143,24 @@ function getEmotionLabelThai(emotion: Emotion): string {
     case "fear":
       return "กลัว";
     case "laugh":
-      return "หัวเราะ";  
+      return "หัวเราะ";
     default:
       return "ปกติ";
   }
+}
+
+function uniqueKeepOrder(items: string[]) {
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  for (const item of items || []) {
+    const clean = normalizeThaiToken(item);
+    if (!clean || seen.has(clean)) continue;
+    seen.add(clean);
+    out.push(clean);
+  }
+
+  return out;
 }
 
 export default function ResultPage() {
@@ -330,18 +169,14 @@ export default function ResultPage() {
 
   type ViewMode = "sentence" | "single";
 
-  const [foundWords, setFoundWords] = useState<ProcessedWordData[]>([]);
-  const [loadingKeywords, setLoadingKeywords] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("sentence");
   const [currentSingleIndex, setCurrentSingleIndex] = useState(0);
   const [currentSentenceIndex, setCurrentSentenceIndex] = useState(0);
   const [sentencePlaying, setSentencePlaying] = useState(true);
   const [singlePlaying, setSinglePlaying] = useState(true);
-
   const [loadingSentenceVideo, setLoadingSentenceVideo] = useState(false);
-  const [sentenceVideoUrl, setSentenceVideoUrl] = useState<string | null>(null);
   const [exportNonce, setExportNonce] = useState(0);
-  const prevBlobUrl = useRef<string | null>(null);
+
   const savedOnceRef = useRef(false);
 
   const state = (location.state as (ResultState & HistoryResultState) | null) ?? null;
@@ -349,380 +184,114 @@ export default function ResultPage() {
 
   const resultData = useMemo(() => {
     if (state?.fromHistory && state?.resultData) {
+      const historyKeywords =
+        state.resultData.keywords ||
+        (state.historyItem?.keywords
+          ? state.historyItem.keywords
+              .split(",")
+              .map((k) => k.trim())
+              .filter(Boolean)
+          : []);
+
       return {
         text: state.resultData.text || state.historyItem?.input_text || "ไม่มีข้อความ",
         summary:
           state.resultData.summary ||
-          state.resultData.translatedText ||
           state.historyItem?.summary_text ||
+          state.resultData.translatedText ||
           state.historyItem?.translated_result ||
           "ไม่มีข้อมูลสรุป",
-        translatedText:
+        thslText:
+          state.resultData.thsl_fixed ||
           state.resultData.translatedText ||
           state.historyItem?.translated_result ||
           "",
-        keywords:
-          state.resultData.keywords ||
-          (state.historyItem?.keywords
-            ? state.historyItem.keywords
-                .split(",")
-                .map((k) => k.trim())
-                .filter(Boolean)
-            : []),
-        thsl_fixed: state.resultData.thsl_fixed || "",
-        historyVideoUrl:
-          state.resultData.sentenceVideoUrl || state.historyItem?.video_url || "",
+        keywords: uniqueKeepOrder(historyKeywords),
+        poseFilenames: state.resultData.pose_filenames || state.resultData.poseFiles || [],
+        poseUrls: state.resultData.pose_urls || [],
+        roles: state.resultData.roles || [],
+        usedSummary: false,
       };
     }
 
+    const words = uniqueKeepOrder(
+      state?.words ||
+        state?.keywords ||
+        state?.matched_words ||
+        state?.thsl_words ||
+        []
+    );
+
+    const poseFilenames = state?.pose_filenames || state?.poseFiles || [];
+    const poseUrls = state?.pose_urls || [];
+
     return {
-      text: state?.originalText || "ไม่มีข้อความ",
-      summary: state?.summary || "ไม่มีข้อมูลสรุป",
-      translatedText: state?.summary || "",
-      keywords: state?.keywords || [],
-      thsl_fixed: state?.thsl_fixed || "",
-      historyVideoUrl: "",
+      text:
+        state?.originalText ||
+        state?.original_text ||
+        state?.inputText ||
+        state?.input_text ||
+        "ไม่มีข้อความ",
+      summary: state?.summary || state?.processed_text || "ไม่มีข้อมูลสรุป",
+      thslText: state?.thsl_fixed || state?.thsl_text || words.join(" "),
+      keywords: words,
+      poseFilenames,
+      poseUrls,
+      roles: state?.roles || [],
+      usedSummary: Boolean(state?.used_summary),
     };
   }, [state]);
 
-  const setNewBlobUrl = (url: string | null) => {
-    if (prevBlobUrl.current && prevBlobUrl.current.startsWith("blob:")) {
-      URL.revokeObjectURL(prevBlobUrl.current);
-      prevBlobUrl.current = null;
-    }
-    if (url && url.startsWith("blob:")) prevBlobUrl.current = url;
-    setSentenceVideoUrl(url);
-  };
-
-  useEffect(() => {
-    return () => {
-      if (prevBlobUrl.current && prevBlobUrl.current.startsWith("blob:")) {
-        URL.revokeObjectURL(prevBlobUrl.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (isFromHistory && resultData.historyVideoUrl) {
-      setSentenceVideoUrl(resultData.historyVideoUrl);
-    }
-  }, [isFromHistory, resultData.historyVideoUrl]);
-
-  useEffect(() => {
-    if (savedOnceRef.current) return;
-    if (isFromHistory) return;
-
-    const inputText = (resultData.text ?? "").trim();
-    const translated = (resultData.summary ?? "").replace(/\s+/g, "").trim();
-
-    if (!inputText || inputText === "ไม่มีข้อความ") return;
-    if (!translated || translated === "ไม่มีข้อมูลสรุป") return;
-
-    savedOnceRef.current = true;
-
-    (async () => {
-      try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-
-        if (!session?.user) {
-          console.log("skip saveHistory: no auth");
-          return;
-        }
-
-        await saveHistory({
-          input_text: inputText,
-          translated_result: translated,
-          summary_text: (resultData.summary ?? "").replace(/\s+/g, "").trim(),
-          keywords: Array.isArray(resultData.keywords)
-            ? resultData.keywords.join(", ")
-            : "",
-          video_url: resultData.historyVideoUrl || undefined,
-        });
-      } catch (e) {
-        console.warn("saveHistory failed:", e);
-        toast.warning("บันทึกประวัติไม่สำเร็จ (ตรวจสอบการล็อกอิน / RLS)");
-      }
-    })();
-  }, [isFromHistory, resultData]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const run = async () => {
-      const summaryText = (resultData.summary ?? "").replace(/\s+/g, "").trim();
-
-      const kwTokens = uniqPreserveOrder(
-        Array.isArray(resultData.keywords) && resultData.keywords.length > 0
-          ? resultData.keywords
-          : segmentThaiWords(summaryText)
-      );
-
-      const fixedTokens = resultData.thsl_fixed?.trim()
-        ? cleanTokens(
-            /\s/.test(resultData.thsl_fixed.trim())
-              ? resultData.thsl_fixed.trim().split(/\s+/)
-              : Array.isArray(resultData.keywords) && resultData.keywords.length > 0
-              ? resultData.keywords
-              : [resultData.thsl_fixed.trim()]
-          )
-        : [];
-
-      if (fixedTokens.length === 0 && kwTokens.length === 0 && !summaryText) {
-        if (cancelled) return;
-        setFoundWords([]);
-        setCurrentSingleIndex(0);
-        setLoadingKeywords(false);
-        return;
-      }
-
-      if (cancelled) return;
-      setLoadingKeywords(true);
-
-      const { data: mapData, error: mapErr } = await supabase
-        .from("sl_category_role")
-        .select("category, role, priority");
-
-      if (mapErr) console.error("❌ Load sl_category_role error:", mapErr);
-
-      const roleMap = new Map<string, { role: RuleRole; priority: number }>();
-      (mapData as CategoryRoleRow[] | null)?.forEach((r) => {
-        roleMap.set(normalizeThaiToken(r.category), {
-          role: normalizeDbRoleToRuleRole(r.role),
-          priority: r.priority ?? 999,
-        });
-      });
-
-      const getRole = (category: string): { role: RuleRole; priority: number } => {
-        const key = normalizeThaiToken(category);
-        return roleMap.get(key) ?? { role: "O", priority: 999 };
-      };
-
-      let finalOrderedTokens: string[] = [];
-
-      if (fixedTokens.length > 0) {
-        finalOrderedTokens = dropSubTokens(uniqPreserveOrder(fixedTokens));
-      } else {
-        const textTokens = uniqPreserveOrder(segmentThaiWords(summaryText));
-        const candidateTextTokens = textTokens.slice(0, 200);
-
-        let extraFromText: string[] = [];
-
-        const IMPORTANT_ROLES = new Set<RuleRole>([
-          "S",
-          "V",
-          "O",
-          "NEG",
-          "PP(Place)",
-          "Adv(Time)",
-          "When/Why/Where/How(?)",
-          "What(?)",
-          "Who(?)",
-          "Whose(?)",
-          "Q(?)",
-          "Pronoun",
-          "V2B",
-          "ClausalVerb",
-          "Adj",
-          "Adj1",
-          "Adj2",
-          "NP",
-          "PAdj",
-          "ComparativeAdj",
-          "Money",
-          "Number",
-          "Currency",
-          "Age",
-          "Year",
-          "Break",
-        ]);
-
-        if (candidateTextTokens.length > 0) {
-          const { data: textRows, error: textErr } = await supabase
-            .from("SL_word")
-            .select("word, category, pose_filename")
-            .in("word", candidateTextTokens);
-
-          if (textErr) {
-            console.warn("⚠️ Cannot load SL_word for summary tokens:", textErr);
-          } else {
-            const rows = (textRows as WordData[]) || [];
-            const seen = new Set<string>();
-
-            for (const tok of candidateTextTokens) {
-              const normTok = normalizeThaiToken(tok);
-              if (!normTok || seen.has(normTok)) continue;
-
-              const candidates = rows.filter(
-                (r) => normalizeThaiToken(r.word) === normTok
-              );
-              if (candidates.length === 0) continue;
-
-              const best = candidates
-                .slice()
-                .sort(
-                  (a, b) =>
-                    getRole(a.category).priority - getRole(b.category).priority
-                )[0];
-
-              const role = getRole(best.category).role;
-              if (IMPORTANT_ROLES.has(role)) {
-                extraFromText.push(normTok);
-                seen.add(normTok);
-              }
-            }
-          }
-        }
-
-        const mergedTokens = uniqPreserveOrder([...kwTokens, ...extraFromText]);
-        const mergedNoSub = dropSubTokens(mergedTokens);
-        const tokensThai = orderTokensByOriginalText(summaryText, mergedNoSub);
-
-        const unique = Array.from(new Set(tokensThai));
-        const { data, error } = await supabase
-          .from("SL_word")
-          .select("word, category, pose_filename")
-          .in("word", unique);
-
-        if (error) {
-          console.error("Fetch SL_word error:", error);
-          if (cancelled) return;
-          setFoundWords([]);
-          setCurrentSingleIndex(0);
-          setLoadingKeywords(false);
-          return;
-        }
-
-        const raw = (data as WordData[]) || [];
-        const grouped = new Map<string, WordData[]>();
-        raw.forEach((row) => {
-          const w = normalizeThaiToken(row.word);
-          if (!grouped.has(w)) grouped.set(w, []);
-          grouped.get(w)!.push(row);
-        });
-
-        const pickBestRow = (token: string, rows: WordData[]) => {
-          const t = normalizeThaiToken(token);
-          return rows
-            .slice()
-            .sort((a, b) => {
-              const ra = getRole(a.category);
-              const rb = getRole(b.category);
-
-              const boostA =
-                isNumberToken(t) && (a.category === "ตัวเลข" || a.category === "จำนวน")
-                  ? -1000
-                  : 0;
-              const boostB =
-                isNumberToken(t) && (b.category === "ตัวเลข" || b.category === "จำนวน")
-                  ? -1000
-                  : 0;
-
-              return ra.priority + boostA - (rb.priority + boostB);
-            })[0];
-        };
-
-        const tagged: { word: string; role: RuleRole | "UNK" }[] = [];
-
-        for (const t of tokensThai) {
-          const rows = grouped.get(t) ?? [];
-          if (rows.length === 0) continue;
-
-          const best = rows.length === 1 ? rows[0] : pickBestRow(t, rows);
-          const r = getRole(best.category);
-          tagged.push({ word: t, role: r.role });
-        }
-
-        const rule = findExactRule(tagged);
-        finalOrderedTokens = rule
-          ? reorderByRule(tagged, rule.thslOrder)
-          : tagged.map((t) => t.word);
-      }
-
-      const { data: dataFinal, error: errFinal } = await supabase
-        .from("SL_word")
-        .select("word, category, pose_filename")
-        .in("word", Array.from(new Set(finalOrderedTokens)));
-
-      if (errFinal) {
-        console.error("Fetch SL_word (final) error:", errFinal);
-        if (cancelled) return;
-        setFoundWords([]);
-        setCurrentSingleIndex(0);
-        setLoadingKeywords(false);
-        return;
-      }
-
-      const rawFinal = (dataFinal as WordData[]) || [];
-      const groupedFinal = new Map<string, WordData[]>();
-      rawFinal.forEach((row) => {
-        const w = normalizeThaiToken(row.word);
-        if (!groupedFinal.has(w)) groupedFinal.set(w, []);
-        groupedFinal.get(w)!.push(row);
-      });
-
-      const pickBestRowFinal = (token: string, rows: WordData[]) => {
-        const t = normalizeThaiToken(token);
-        return rows
-          .slice()
-          .sort((a, b) => {
-            const ra = getRole(a.category);
-            const rb = getRole(b.category);
-
-            const boostA =
-              isNumberToken(t) && (a.category === "ตัวเลข" || a.category === "จำนวน")
-                ? -1000
-                : 0;
-            const boostB =
-              isNumberToken(t) && (b.category === "ตัวเลข" || b.category === "จำนวน")
-                ? -1000
-                : 0;
-
-            return ra.priority + boostA - (rb.priority + boostB);
-          })[0];
-      };
-
-      const orderedPickedRows: WordData[] = [];
-      for (const tok of finalOrderedTokens) {
-        const rows = groupedFinal.get(normalizeThaiToken(tok)) ?? [];
-        if (rows.length === 0) continue;
-        const best = rows.length === 1 ? rows[0] : pickBestRowFinal(tok, rows);
-        orderedPickedRows.push(best);
-      }
-
-      const processed: ProcessedWordData[] = orderedPickedRows.map((item) => ({
-        word: normalizeThaiToken(item.word),
-        category: item.category,
-        pose_filename: item.pose_filename,
-        fullUrl: buildPoseUrl(item.pose_filename),
-      }));
-
-      if (cancelled) return;
-
-      setFoundWords(processed);
-      setCurrentSingleIndex(0);
-      setLoadingKeywords(false);
-    };
-
-    run();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    resultData.summary,
-    resultData.thsl_fixed,
-    resultData.keywords,
-  ]);
-
   const poseItems = useMemo<PosePlaylistItem[]>(() => {
-    return foundWords.map((item) => ({
-      url: item.fullUrl,
-      label: item.word,
-      emotion: getEmotionFromWord(item.word),
+    const fromItems =
+      state?.items?.map((item) => ({
+        label: item.word || "",
+        filename: item.pose_filename || "",
+        url: item.pose_url || "",
+        role: item.role || "",
+      })) || [];
+
+    const fromPoses =
+      state?.poses?.map((item) => ({
+        label: item.word || "",
+        filename: item.pose_filename || "",
+        url: item.url || "",
+        role: item.role || "",
+      })) || [];
+
+    const fromArrays = resultData.poseFilenames.map((filename, index) => ({
+      label: resultData.keywords[index] || filename.replace(/\.pose$/i, ""),
+      filename,
+      url: resultData.poseUrls[index] || "",
+      role: resultData.roles[index] || "",
     }));
-  }, [foundWords]);
+
+    const raw = [...fromItems, ...fromPoses, ...fromArrays];
+
+    const seen = new Set<string>();
+    const out: PosePlaylistItem[] = [];
+
+    for (const item of raw) {
+      const label = normalizeThaiToken(item.label);
+      const filename = normalizeThaiToken(item.filename);
+      const url = normalizeThaiToken(item.url) || (filename ? buildPoseUrl(filename) : "");
+
+      if (!url) continue;
+
+      const key = `${label}-${url}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      out.push({
+        url,
+        label: label || filename.replace(/\.pose$/i, ""),
+        emotion: getEmotionFromWord(label || filename.replace(/\.pose$/i, "")),
+        role: item.role,
+      });
+    }
+
+    return out;
+  }, [state, resultData]);
 
   const currentSingleItem =
     poseItems.length > 0
@@ -743,6 +312,44 @@ export default function ResultPage() {
     setSinglePlaying(true);
   }, [currentSingleIndex, currentSingleItem?.label]);
 
+  useEffect(() => {
+    if (savedOnceRef.current) return;
+    if (isFromHistory) return;
+
+    const inputText = (resultData.text ?? "").trim();
+    const summary = (resultData.summary ?? "").trim();
+    const translated = poseItems.map((p) => p.label).join(" ").trim();
+
+    if (!inputText || inputText === "ไม่มีข้อความ") return;
+    if (!translated && poseItems.length === 0) return;
+
+    savedOnceRef.current = true;
+
+    (async () => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (!session?.user) {
+          console.log("skip saveHistory: no auth");
+          return;
+        }
+
+        await saveHistory({
+          input_text: inputText,
+          translated_result: translated,
+          summary_text: summary,
+          keywords: poseItems.map((p) => p.label).join(", "),
+          video_url: undefined,
+        });
+      } catch (e) {
+        console.warn("saveHistory failed:", e);
+        toast.warning("บันทึกประวัติไม่สำเร็จ (ตรวจสอบการล็อกอิน / RLS)");
+      }
+    })();
+  }, [isFromHistory, resultData, poseItems]);
+
   const handleDownloadSentenceVideo = async () => {
     try {
       setViewMode("sentence");
@@ -753,7 +360,6 @@ export default function ResultPage() {
       setLoadingSentenceVideo(true);
       toast.info("กำลังสร้าง GIF ทั้งประโยค...");
 
-      // รอให้ PosePlayer เริ่มเล่นใหม่และ canvas วาดเฟรมแรกก่อน
       await new Promise((resolve) => setTimeout(resolve, 1500));
 
       const canvas = document.querySelector("canvas") as HTMLCanvasElement | null;
@@ -763,7 +369,7 @@ export default function ResultPage() {
         return;
       }
 
-      const gifDurationMs = Math.max(foundWords.length * 4500, 8000);
+      const gifDurationMs = Math.max(poseItems.length * 4500, 8000);
 
       await downloadCanvasAsGif(
         canvas,
@@ -793,7 +399,8 @@ export default function ResultPage() {
     !state ||
     (!resultData.text &&
       !resultData.summary &&
-      (!resultData.keywords || resultData.keywords.length === 0));
+      resultData.keywords.length === 0 &&
+      poseItems.length === 0);
 
   if (noData) {
     return (
@@ -870,22 +477,15 @@ export default function ResultPage() {
                 </div>
               </div>
 
-              {loadingKeywords ? (
-                <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden mb-4 border border-white/10 shadow-inner">
-                  <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
-                    <RefreshCw className="animate-spin mb-2" />
-                    <span className="text-xs">กำลังเตรียมท่าภาษามือ...</span>
-                  </div>
-                </div>
-              ) : poseItems.length > 0 ? (
+              {poseItems.length > 0 ? (
                 <>
                   <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden border border-white/10 shadow-inner">
                     <PosePlayer
-                      key={`sentence-${poseItems.length}-${resultData.summary ?? ""}-${exportNonce}`}
+                      key={`sentence-${poseItems.length}-${resultData.summary}-${exportNonce}`}
                       items={poseItems}
                       width={640}
                       height={360}
-                      fps={42} //ความเร็ววิดีโอ
+                      fps={42}
                       confThreshold={0.05}
                       flipY={false}
                       loopPlaylist={false}
@@ -896,28 +496,19 @@ export default function ResultPage() {
                     />
                   </div>
 
-                  <div className="mt-3 mb-4 rounded-2xl border border-white/40 
-                    bg-gradient-to-r from-[#F8FAFC] to-[#EEF2FF] 
-                    px-4 py-3 shadow-[0_8px_20px_rgba(15,31,47,0.12)] backdrop-blur">
+                  <div className="mt-3 mb-4 rounded-2xl border border-white/40 bg-gradient-to-r from-[#F8FAFC] to-[#EEF2FF] px-4 py-3 shadow-[0_8px_20px_rgba(15,31,47,0.12)] backdrop-blur">
                     <div className="flex flex-wrap items-center justify-center gap-2">
                       <button
                         onClick={() => setSentencePlaying((v) => !v)}
-                        className="inline-flex h-9 w-9 items-center justify-center 
-                          rounded-full 
-                          bg-gradient-to-br from-[#2563EB] to-[#1E40AF] 
-                          text-white shadow-md 
-                          hover:scale-105 active:scale-95 
-                          transition-all"
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-[#2563EB] to-[#1E40AF] text-white shadow-md hover:scale-105 active:scale-95 transition-all"
                         aria-label={sentencePlaying ? "Pause" : "Play"}
                       >
                         {sentencePlaying ? <Pause size={14} /> : <Play size={14} />}
                       </button>
 
-                      {poseItems.length > 0 && (
-                        <span className="rounded-xl border border-[#94A3B8] bg-[#F8FAFC] px-3 py-2 text-[11px] font-medium text-[#0F1F2F] shadow-sm">
-                          ลำดับคำที่แสดง: {currentSentenceIndex + 1}/{poseItems.length}
-                        </span>
-                      )}
+                      <span className="rounded-xl border border-[#94A3B8] bg-[#F8FAFC] px-3 py-2 text-[11px] font-medium text-[#0F1F2F] shadow-sm">
+                        ลำดับคำที่แสดง: {currentSentenceIndex + 1}/{poseItems.length}
+                      </span>
 
                       <span className="rounded-lg border border-[#94A3B8] bg-[#F8FAFC] px-3 py-2 text-[11px] font-medium text-[#0F1F2F] shadow-sm">
                         คำที่กำลังแสดง: {currentSentenceItem?.label ?? "-"}
@@ -965,21 +556,12 @@ export default function ResultPage() {
               transition={{ delay: 0.1 }}
               className="border-2 border-[#223C55] dark:border-[#213B54] rounded-xl p-5 bg-[#A6BFE3]"
             >
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                  <Video size={18} className="text-[#263F5D]" />
-                  <h2 className="font-semibold text-[#263F5D] text-sm">ดูทีละคำ</h2>
-                </div>
+              <div className="flex items-center gap-2 mb-4">
+                <Video size={18} className="text-[#263F5D]" />
+                <h2 className="font-semibold text-[#263F5D] text-sm">ดูทีละคำ</h2>
               </div>
 
-              {loadingKeywords ? (
-                <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden mb-4 border border-white/10 shadow-inner">
-                  <div className="absolute inset-0 flex flex-col items-center justify-center text-white/50">
-                    <RefreshCw className="animate-spin mb-2" />
-                    <span className="text-xs">กำลังค้นหาท่าภาษามือ...</span>
-                  </div>
-                </div>
-              ) : currentSingleItem ? (
+              {currentSingleItem ? (
                 <>
                   <div className="relative aspect-video bg-[#0F1F2F] rounded-lg overflow-hidden border border-white/10 shadow-inner">
                     <PosePlayer
@@ -996,21 +578,14 @@ export default function ResultPage() {
                     />
                   </div>
 
-                  <div className="mt-3 mb-4 rounded-2xl border border-white/40 
-                    bg-gradient-to-r from-[#F8FAFC] to-[#EEF2FF] 
-                    px-4 py-3 shadow-[0_8px_20px_rgba(15,31,47,0.12)] backdrop-blur">
+                  <div className="mt-3 mb-4 rounded-2xl border border-white/40 bg-gradient-to-r from-[#F8FAFC] to-[#EEF2FF] px-4 py-3 shadow-[0_8px_20px_rgba(15,31,47,0.12)] backdrop-blur">
                     <div className="flex flex-wrap items-center justify-center gap-2">
                       <button
-                        onClick={() => setSentencePlaying((v) => !v)}
-                        className="inline-flex h-9 w-9 items-center justify-center 
-                          rounded-full 
-                          bg-gradient-to-br from-[#2563EB] to-[#1E40AF] 
-                          text-white shadow-md 
-                          hover:scale-105 active:scale-95 
-                          transition-all"
-                        aria-label={sentencePlaying ? "Pause" : "Play"}
+                        onClick={() => setSinglePlaying((v) => !v)}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-[#2563EB] to-[#1E40AF] text-white shadow-md hover:scale-105 active:scale-95 transition-all"
+                        aria-label={singlePlaying ? "Pause" : "Play"}
                       >
-                        {sentencePlaying ? <Pause size={14} /> : <Play size={14} />}
+                        {singlePlaying ? <Pause size={14} /> : <Play size={14} />}
                       </button>
 
                       <span className="rounded-lg border border-[#94A3B8] bg-[#F8FAFC] px-3 py-2 text-[11px] font-medium text-[#0F1F2F] shadow-sm">
@@ -1018,7 +593,7 @@ export default function ResultPage() {
                       </span>
 
                       <span className="rounded-lg border border-[#94A3B8] bg-[#F8FAFC] px-3 py-2 text-[11px] font-medium text-[#0F1F2F] shadow-sm">
-                        สีหน้า: {getEmotionLabelThai(currentSingleItem.emotion ?? "neutral")}
+                        สีหน้า: {getEmotionLabelThai(currentSingleItem.emotion)}
                       </span>
                     </div>
                   </div>
@@ -1047,8 +622,9 @@ export default function ResultPage() {
 
             <div className="border-2 border-[#223C55] dark:border-[#213B54] rounded-xl p-5 bg-[#A6BFE3]">
               <h2 className="font-semibold text-[#263F5D] mb-2 text-sm">สรุปใจความ</h2>
-              <p className="text-[#263F5D] leading-relaxed text-sm">
-                {(resultData.summary ?? "").replace(/\s+/g, "").trim()}
+              <p className="text-[#263F5D] leading-relaxed text-sm">{resultData.summary}</p>
+              <p className="text-xs text-[#263F5D]/60 mt-2">
+                *สรุปใจความจะแสดงเฉพาะคำสำคัญที่พบในฐานข้อมูลคำศัพท์ภาษามือและมีไฟล์ท่าทางรองรับ
               </p>
             </div>
           </motion.div>
@@ -1059,19 +635,18 @@ export default function ResultPage() {
             transition={{ delay: 0.4 }}
             className="border-2 border-[#223C55] dark:border-[#213B54] rounded-xl p-5 bg-[#A6BFE3]"
           >
-            <h2 className="font-semibold text-[#263F5D] mb-3 text-sm"># คำสำคัญ (ThSL pattern)</h2>
+            <h2 className="font-semibold text-[#263F5D] mb-3 text-sm">
+              # คำสำคัญ (ThSL Pattern)
+            </h2>
 
             <div className="flex flex-wrap gap-2">
-              {loadingKeywords ? (
-                <p className="text-[#263F5D]/60 text-sm animate-pulse">กำลังเรียงตามกฎ ThSL...</p>
-              ) : foundWords.length > 0 ? (
-                foundWords.map((item, idx) => {
+              {poseItems.length > 0 ? (
+                poseItems.map((item, idx) => {
                   const isActive = currentSingleIndex === idx;
-                  const emo = getEmotionFromWord(item.word);
 
                   return (
                     <Badge
-                      key={`${item.word}-${idx}`}
+                      key={`${item.label}-${idx}`}
                       onClick={() => {
                         setCurrentSingleIndex(idx);
                         setViewMode("single");
@@ -1081,9 +656,9 @@ export default function ResultPage() {
                           ? "bg-[#FEC530] text-[#0F1F2F] scale-105 shadow-md border-white/20"
                           : "bg-[#0F1F2F] text-[#C9A7E3] hover:bg-[#1a2f44] hover:scale-105"
                       }`}
-                      title={`หมวดหมู่: ${item.category} | emotion: ${emo}`}
+                      title={item.role ? `role: ${item.role} | emotion: ${item.emotion}` : `emotion: ${item.emotion}`}
                     >
-                      {item.word}
+                      {item.label}
                     </Badge>
                   );
                 })
