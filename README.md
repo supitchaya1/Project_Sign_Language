@@ -1,4 +1,4 @@
-# 🎯 SP2025-DST-SignLanguageApp
+# SP2025-DST-SignLanguageApp
 
 > Thai Speech/Text → Thai Sign Language Translation Web Application  
 > ระบบแปล **เสียงพูด / ข้อความภาษาไทย → ภาษามือไทย (แอนิเมชัน + วิดีโอ)**
@@ -19,14 +19,14 @@
 - ใช้ AI + Animation ช่วยแปลภาษา
 
 ##🌟 Features
-🎤 Speech-to-Text (พูดผ่านไมค์)
-📝 Text Input (พิมพ์ข้อความ)
-🧠 Summarization (สรุปใจความ)
-🔑 Keyword Extraction
-✋ Sign Language Animation (.pose)
-🎬 Export Video (.GIF)
-👤 Authentication (Supabase)
-🕘 Translation History
+- Speech-to-Text (พูดผ่านไมค์)
+- Text Input (พิมพ์ข้อความ)
+- Summarization (สรุปใจความ)
+- Keyword Extraction
+- Sign Language Animation (.pose)
+- Export Video (.GIF)
+- Authentication (Supabase)
+- Translation History
 
 ##🧠 How It Works
 User Input (Speech/Text)
