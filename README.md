@@ -69,8 +69,6 @@ Video Export (.GIF)
 
 ##📂 Project Structure
 
-## 📂 Project Structure
-
 ```text
 Project_Sign_Language/
 ├── backend/
