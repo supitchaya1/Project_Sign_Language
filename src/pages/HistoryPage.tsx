@@ -243,25 +243,31 @@ export default function HistoryPage() {
     }
   };
 
-  const handleViewVideo = (item: HistoryRecord) => {
-    navigate("/result", {
-      state: {
-        fromHistory: true,
-        historyItem: item,
-        resultData: {
-          text: item.input_text ?? "",
-          translatedText: item.translated_result ?? "",
-          summary: item.summary_text ?? "",
-          keywords: item.keywords
-            ? item.keywords
-                .split(",")
-                .map((k) => k.trim())
-                .filter(Boolean)
-            : [],
-          sentenceVideoUrl: item.video_url ?? "",
+  const handleViewVideo = async (item: HistoryRecord) => {
+    try {
+      const res = await fetch("/api/translate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
         },
-      },
-    });
+        body: JSON.stringify({
+          text: item.input_text,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        toast.error("ไม่สามารถโหลดวิดีโอจากประวัติได้");
+        return;
+      }
+
+      navigate("/result", {
+        state: data, // 🔥 ส่งทั้งก้อนเลย
+      });
+    } catch (err) {
+      toast.error("เกิดข้อผิดพลาดในการโหลดวิดีโอ");
+    }
   };
 
   const getDeleteDialogText = () => {
