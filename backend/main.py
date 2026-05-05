@@ -7,7 +7,7 @@ import subprocess
 import traceback
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -1053,7 +1053,7 @@ def resolve_word(word: str = Query(..., description="คำศัพท์ภา
 # =========================
 @app.get("/api/pose")
 def get_pose_file(name: str = Query(..., description="ชื่อไฟล์ .pose")):
-    name = clean_text(name)
+    name = clean_text(unquote(name))
 
     if not name:
         raise HTTPException(status_code=400, detail="name cannot be empty")
@@ -1072,7 +1072,7 @@ def get_pose_file(name: str = Query(..., description="ชื่อไฟล์ .
 
 @app.get("/api/pose_meta")
 def pose_meta(name: str = Query(..., description="ชื่อไฟล์ .pose")):
-    name = clean_text(name)
+    name = clean_text(unquote(name))
 
     if not name:
         raise HTTPException(status_code=400, detail="name cannot be empty")
