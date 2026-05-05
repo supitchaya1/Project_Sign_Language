@@ -341,6 +341,10 @@ export default function HistoryPage() {
         >
           ประวัติการแปล
         </motion.h1>
+        
+        <p className="text-center text-sm text-[#263F5D]/70 dark:text-[#D8C0D0]/70 -mt-5 mb-6">
+          ระบบจะแสดงและเก็บประวัติสูงสุด 10 รายการล่าสุด โดยลบรายการเก่าอัตโนมัติ
+        </p>
 
         {errorMessage && (
           <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600 mb-4">

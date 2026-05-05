@@ -1,5 +1,6 @@
 import { supabase } from "@/lib/supabase";
 
+const HISTORY_LIMIT = 10;
 export const NOT_LOGGED_IN = "NOT_LOGGED_IN";
 
 export interface HistoryRecord {
@@ -30,6 +31,34 @@ function normalizeKeywords(s?: string | null) {
     .map((x) => x.trim())
     .filter(Boolean)
     .join(", ");
+}
+
+async function cleanupOldHistory(userId: string) {
+  const { data, error } = await supabase
+    .from("translation_history")
+    .select("id")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("cleanupOldHistory select error:", error);
+    throw new Error(error.message);
+  }
+
+  const oldIds = (data ?? []).slice(HISTORY_LIMIT).map((item) => item.id);
+
+  if (oldIds.length === 0) return;
+
+  const { error: deleteError } = await supabase
+    .from("translation_history")
+    .delete()
+    .in("id", oldIds)
+    .eq("user_id", userId);
+
+  if (deleteError) {
+    console.error("cleanupOldHistory delete error:", deleteError);
+    throw new Error(deleteError.message);
+  }
 }
 
 export async function saveHistory({
@@ -99,7 +128,7 @@ export async function saveHistory({
       console.error("saveHistory update error:", error);
       throw new Error(error.message);
     }
-
+    await cleanupOldHistory(user.id);
     return data as HistoryRecord;
   }
 
@@ -122,7 +151,7 @@ export async function saveHistory({
     console.error("saveHistory insert error:", error);
     throw new Error(error.message);
   }
-
+  await cleanupOldHistory(user.id);
   return data as HistoryRecord;
 }
 
@@ -142,7 +171,8 @@ export async function fetchMyHistory() {
       video_url
     `)
     .eq("user_id", user.id)
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    .limit(HISTORY_LIMIT);
 
   if (error) {
     console.error("fetchMyHistory error:", error);
