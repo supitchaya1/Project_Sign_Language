@@ -19,7 +19,7 @@
 - ใช้ AI + Animation ช่วยแปลภาษา
 
 ##🌟 Features
-- Speech-to-Text (พูดผ่านไมค์)
+- Speech-to-Text (พูดผ่านไมค์/ไฟล์เสียง)
 - Text Input (พิมพ์ข้อความ)
 - Summarization (สรุปใจความ)
 - Keyword Extraction
@@ -29,6 +29,7 @@
 - Translation History
 
 ##🧠 How It Works
+```text
 User Input (Speech/Text)
         ↓
 Speech-to-Text
@@ -68,47 +69,30 @@ Video Export (.GIF)
 
 ##📂 Project Structure
 
+## 📂 Project Structure
+
+```text
 Project_Sign_Language/
 ├── backend/
 │   ├── main.py
 │   ├── poses/
 │   ├── videos/
+│   ├── render/
 │   ├── requirements.txt
 │   └── .env
-│   └── ...
-│
-├── public/
-│   └── ...
 │
 ├── src/
 │   ├── components/
-│   ├── pages/
-│   ├── lib/
-│   ├── contexts/
 │   ├── services/
+│   ├── pages/
 │   └── ...
 │
+├── public/
 ├── supabase/
-│   ├── functions/
-│   └── ...
-│
 ├── .env
 ├── .env.local
 ├── .env.production
-├── .gitignore
-├── components.json
-├── eslint.config.js
-├── index.html
-├── package.json
-├── package-lock.json
-├── postcss.config.js
-├── tailwind.config.ts
-├── tsconfig.json
-├── tsconfig.app.json
-├── tsconfig.node.json
-├── vercel.json
-├── vite.config.ts
-└── README.md⚡ Getting Started (Run in 3 Steps)
+└── README.md
 
 ##🖥️ Frontend Setup
 
@@ -118,9 +102,21 @@ npm run dev
 ##⚙️ Backend Setup
 
 cd backend
+
+# สร้าง virtual environment
 python -m venv .venv
-source .venv/bin/activate   # (Windows: .venv\Scripts\activate)
+
+# Activate
+# Mac/Linux:
+source .venv/bin/activate
+
+# Windows:
+.venv\Scripts\activate
+
+# install dependencies
 pip install -r requirements.txt
+
+# run server
 uvicorn main:app --reload
 
 ##🔐 Environment Variables (สำคัญมาก)
@@ -160,6 +156,7 @@ VITE_BACKEND_BASE=/api
 
 
 ##⚠️ Important
+
 ❌ ห้าม push .env
 ✅ frontend ต้องใช้ VITE_
 ✅ ต้องมี ffmpeg + node
@@ -182,6 +179,7 @@ POST /api/render_sentence_GIF
 สร้างวิดีโอจากประโยค
 
 ##🎬 Video Export Pipeline
+
 Frontend
    ↓
 Puppeteer
@@ -193,12 +191,14 @@ FFmpeg
 GIF Download
 
 ##⚠️ Limitations
+
 - เสียงมีผลต่อ accuracy
 - rule-based ยังไม่รองรับประโยคซับซ้อน
 - vocabulary จำกัด
 - animation ยังไม่สมจริง
 
 ##🔮 Future Work
+
 - ใช้ AI แทน rule-based
 - เพิ่ม vocabulary
 - ใช้ 3D avatar
@@ -206,6 +206,7 @@ GIF Download
 - improve speed
 
 ##🛠️ Troubleshooting
+
 ❌ 422 Error
 → JSON ไม่ตรง schema
 
